@@ -6,9 +6,9 @@ testing, and the parts that live **outside** the deploy scripts.
 
 ## Components
 
-| Component | Where it lives | Vendored here? |
+| Component | Where it lives | In this repo? |
 |---|---|---|
-| Guard extension | `~/.pi/agent/extensions/pi-sandbox-guard/` | yes (`src/`, `vendor/`) — via `npm run deploy` / `deploy:all` |
+| Guard extension | `~/.pi/agent/extensions/pi-sandbox-guard/` | yes (`src/`) — via `npm run deploy` / `deploy:all` |
 | Seatbelt profile + preamble | `~/.local/bin/pi-sandbox.{sb,…}` | yes (`sandbox/`) — via `npm run deploy:launchers` / `deploy:all` |
 | Protected `pi` shim | `~/.local/bin/pi` | yes (`launchers/pi`) — via `npm run deploy:launchers` / `deploy:all` |
 | Custom launchers (optional) | `~/.local/bin/` | **no** — keep yours outside this repo; opt in with `--extra-launchers` (template: `launchers/example-custom`) |
@@ -30,7 +30,7 @@ testing, and the parts that live **outside** the deploy scripts.
 4. **Provider tokens are not isolated per tool** by this install. Denying writes
    to `auth.json` is tamper-resistance, not a credential broker.
 
-Full model: [SECURITY.md](../SECURITY.md) and [SANDBOX.md](SANDBOX.md).
+Full model: [SECURITY.md](../SECURITY.md) and [ARCHITECTURE.md](ARCHITECTURE.md).
 
 ## Clean-machine install order
 
@@ -78,6 +78,14 @@ Component-only deployment remains available through `npm run deploy` and
 `npm run deploy:launchers`. Package installation does not mutate Git hook
 configuration.
 
+The deploy builds a **self-contained copy** into Pi's auto-discovery directory,
+verifies that deployed copy, then swaps it into place atomically and writes a
+`.deployed-version` stamp (git sha + dirty flag + file hashes + Pi version). So
+**the git repo can be moved or deleted and Pi stays guarded** — the repo is the
+source of truth, the deploy dir is a built artifact. `pi install file:/path/to/repo`
+is deliberately NOT used: it would record the repo path in Pi's settings, coupling
+the install to the repo.
+
 ## Protection boundary
 
 The default protected entrypoint is a `pi` shim installed earlier on
@@ -104,7 +112,7 @@ Before Seatbelt applies, the preamble/shim:
 - **strict nested** handling (own-shim re-entry with probes; unknown parent
   sandboxes fail closed)
 
-See [SANDBOX.md](SANDBOX.md) for detail. Do not launch from unsafe roots (`$HOME`,
+See [ARCHITECTURE.md](ARCHITECTURE.md) for detail. Do not launch from unsafe roots (`$HOME`,
 `~/Downloads`, `/`, …); the shim refuses those project boundaries.
 
 ## Which Pi installs are supported
@@ -172,6 +180,36 @@ and the launch becomes `<node> <cli.js>`. Without that record the shebang resolv
 `node` from the shim's sanitized PATH, which has no entry for a version-manager Node —
 so binding is what makes those installs work at all.
 
+## Environment configuration
+
+All config is host-trusted env, never read from the target repo:
+
+| Var | Meaning | Default |
+|---|---|---|
+| `POLICY_RM_SAFE_ROOTS` | Extra `:`-separated roots under which `rm -rf` is permitted | — |
+| `PI_EXECUTABLE` | Override the real Pi executable used by sandbox launchers | from config, else PATH auto-detect outside the shim dir |
+| `PI_EXECUTABLE_CONFIG` | Path to executable config | `~/.config/pi-sandbox-guard/executables.conf` (pinned/trusted by hardened shim) |
+| `PI_EXECUTABLE_KEY` | Config key for the executable lookup | launcher basename, usually `pi` |
+| `PI_SANDBOX_PROFILE` | Ignored by the protected shim; the profile is pinned to the shim install dir | `~/.local/bin/pi-sandbox.sb` |
+| `PI_PROJECT` | Explicit project write boundary for the OS sandbox | git top-level, else `$PWD` |
+| `PI_RLIMIT_CPU` | Optional CPU seconds limit for sandboxed Pi process tree | unset |
+
+`PI_EXECUTABLE` is a privileged host override (see the section above). Ambient values
+must resolve to a trusted system/Pi prefix; executable config files are the portable
+way to configure non-default installs. Relative executable paths are refused.
+
+`PI_PROJECT` is privileged in the same way: it **defines** the Seatbelt write
+boundary, so whatever it names becomes writable. The shim refuses broad, system, and
+credential paths for every resolution mode (see [ARCHITECTURE.md](ARCHITECTURE.md)), but it
+cannot tell a legitimate wide project root from an attacker's choice of some other
+valuable directory. Treat it the way you treat `PI_EXECUTABLE`: it must come from you,
+not from a project you are inspecting. A `direnv`/`.envrc` you approved in an
+untrusted repo can set it, so do not approve one that does.
+
+Analyzer security events are written under `~/.pi/agent/security-events.log` so they
+survive the Seatbelt layer. A repo-controlled security-log path env var is
+intentionally not supported.
+
 ## After each agent session
 
 1. Review `git status` / diffs (and submodule / worktree pointers).
@@ -212,7 +250,7 @@ of what is being pushed:
 | Push | Gate | Cost |
 |---|---|---|
 | Any branch, analyzer untouched | `npm run test:fast` | ~12s |
-| Range touches `src/`, `vendor/`, or `test/corpus/` | `npm test` | ~140s |
+| Range touches `src/` or `test/corpus/` | `npm test` | ~140s |
 | New remote ref (no base to diff) | `npm test` | ~140s |
 | `main` / `master` | `npm test` | ~140s |
 | Branch deletion | skipped | — |
@@ -222,7 +260,7 @@ changes land here by squash-merging a PR — GitHub does that server-side, so no
 local push to `main` ever happens and a `main`-only gate would never fire on the
 workflow actually in use. **It is tiered** because ~128s of the ~140s total is the
 analyzer path (`test/corpus.mjs` runs 369 cases), and those stages only
-characterize `src/`, `vendor/`, and `test/corpus/` — running them for a docs edit
+characterize `src/` and `test/corpus/` — running them for a docs edit
 buys nothing while making the gate annoying enough to invite habitual skipping,
 which is the real failure mode.
 
@@ -262,8 +300,12 @@ Seatbelt boundary applied to arbitrary agent projects.
   state and credentials (and the sandbox denies writing them from inside the
   profile; that is not full token isolation).
 - **Any live link to the analyzer's origin project** — not a dependency, submodule,
-  or re-vendor source. The analyzer in `vendor/validate-bash-command.sh` is a
-  self-contained MIT copy **owned and maintained in this repository**. Historical
-  origin details: [`../vendor/README.md`](../vendor/README.md). Known behavioral
-  gaps: [`../KNOWN_ANALYZER_GAPS.md`](../KNOWN_ANALYZER_GAPS.md).
+  or third-party copy we track, so there is no sync or update-from-upstream workflow.
+  `src/validate-bash-command.sh` is a self-contained MIT script **owned and
+  maintained in this repository** (it began as an adaptation of an earlier
+  MIT-licensed analyzer by the same author, since diverged). Deploy stamps
+  therefore record local file integrity only — they make no parity claim against
+  any external tree. Fix analyzer gaps here, and record any verdict change in
+  `test/corpus/corpus.json` and
+  [`ARCHITECTURE.md`](ARCHITECTURE.md#known-analyzer-gaps).
 
