@@ -8,10 +8,10 @@ testing, and the parts that live **outside** the deploy scripts.
 
 | Component | Where it lives | In this repo? |
 |---|---|---|
-| Guard extension | `~/.pi/agent/extensions/pi-sandbox-guard/` | yes (`src/`) — via `npm run deploy` / `deploy:all` |
-| Seatbelt profile + preamble | `~/.local/bin/pi-sandbox.{sb,…}` | yes (`sandbox/`) — via `npm run deploy:launchers` / `deploy:all` |
-| Protected `pi` shim | `~/.local/bin/pi` | yes (`launchers/pi`) — via `npm run deploy:launchers` / `deploy:all` |
-| Custom launchers (optional) | `~/.local/bin/` | **no** — keep yours outside this repo; opt in with `--extra-launchers` (template: `launchers/example-custom`) |
+| Guard extension | `~/.pi/agent/extensions/pi-sandbox-guard/` | yes (`src/`); via `npm run deploy` / `deploy:all` |
+| Seatbelt profile + preamble | `~/.local/bin/pi-sandbox.{sb,…}` | yes (`sandbox/`); via `npm run deploy:launchers` / `deploy:all` |
+| Protected `pi` shim | `~/.local/bin/pi` | yes (`launchers/pi`); via `npm run deploy:launchers` / `deploy:all` |
+| Custom launchers (optional) | `~/.local/bin/` | **no**. Keep yours outside this repo; opt in with `--extra-launchers` (template: `launchers/example-custom`) |
 | Executable config | `~/.config/pi-sandbox-guard/executables.conf` | optional example (`config/executables.example.conf`) |
 | Pi (`@earendil-works/pi-coding-agent`) | global npm | **no** (install separately) |
 
@@ -24,8 +24,8 @@ testing, and the parts that live **outside** the deploy scripts.
 3. **Host environment is trusted; project env is not.** Launch from a real user
    account with a normal home directory. Do not point the shim at
    repo-controlled executable config or ambient hostile `PATH`/`TMPDIR`/`USER`.
-   Note that `PI_PROJECT` and `PI_EXECUTABLE` are privileged overrides — the
-   first *defines* the write boundary — so a project-supplied value (an approved
+   Note that `PI_PROJECT` and `PI_EXECUTABLE` are privileged overrides, and the
+   first *defines* the write boundary, so a project-supplied value (an approved
    `.envrc`, for instance) is a real escalation. Set them yourself or not at all.
 4. **Provider tokens are not isolated per tool** by this install. Denying writes
    to `auth.json` is tamper-resistance, not a credential broker.
@@ -81,7 +81,7 @@ configuration.
 The deploy builds a **self-contained copy** into Pi's auto-discovery directory,
 verifies that deployed copy, then swaps it into place atomically and writes a
 `.deployed-version` stamp (git sha + dirty flag + file hashes + Pi version). So
-**the git repo can be moved or deleted and Pi stays guarded** — the repo is the
+**the git repo can be moved or deleted and Pi stays guarded**: the repo is the
 source of truth, the deploy dir is a built artifact. `pi install file:/path/to/repo`
 is deliberately NOT used: it would record the repo path in Pi's settings, coupling
 the install to the repo.
@@ -117,7 +117,7 @@ See [ARCHITECTURE.md](ARCHITECTURE.md) for detail. Do not launch from unsafe roo
 
 ## Which Pi installs are supported
 
-**All of them — after one `npm run bind`.** Auto-detection alone covers only npm
+**All of them, after one `npm run bind`.** Auto-detection alone covers only npm
 installs made *into* a Homebrew or `/usr/local` prefix, because it searches a fixed
 list of trusted path shapes. That list cannot describe the real world:
 
@@ -125,11 +125,11 @@ list of trusted path shapes. That list cannot describe the real world:
 |---|---|---|
 | `npm i -g` with `prefix=/opt/homebrew` | `/opt/homebrew/lib/node_modules/…` | yes |
 | `npm i -g` with `prefix=/usr/local` | `/usr/local/lib/node_modules/…` | yes |
-| `brew install pi-coding-agent` | `/opt/homebrew/Cellar/…/libexec/…` | no — bind |
-| `npm i -g` (default sudo-free prefix) | `~/.npm-global/lib/node_modules/…` | no — bind |
-| nvm / fnm / volta / asdf / mise | version-numbered dirs under `$HOME` | no — bind |
-| pnpm / bun / yarn global | manager-specific global root | no — bind |
-| Nix | `/nix/store/…` | no — bind |
+| `brew install pi-coding-agent` | `/opt/homebrew/Cellar/…/libexec/…` | no; bind |
+| `npm i -g` (default sudo-free prefix) | `~/.npm-global/lib/node_modules/…` | no; bind |
+| nvm / fnm / volta / asdf / mise | version-numbered dirs under `$HOME` | no; bind |
+| pnpm / bun / yarn global | manager-specific global root | no; bind |
+| Nix | `/nix/store/…` | no; bind |
 
 ```bash
 npm run bind                 # detect, confirm, record
@@ -144,7 +144,7 @@ nvm/volta/mise, or a `brew upgrade`); a stale binding **fails closed** with the
 recorded path and the command to fix it, rather than silently falling back.
 
 **Not supported, deliberately:** `npx`/`bunx` and other transient runs, whose path
-changes per invocation — there is nothing stable to record. Docker and Linux are out
+changes per invocation, so there is nothing stable to record. Docker and Linux are out
 of scope entirely (`sandbox-exec` is macOS-only).
 
 ### Why a recorded path is trusted when an environment variable is not
@@ -155,7 +155,7 @@ two different rules, on purpose:
 - **`pi=` in the pinned config** is *operator-recorded host state*. The protected shim
   reads it from a path under the real home directory and ignores an ambient
   `PI_EXECUTABLE_CONFIG` entirely, and the Seatbelt profile does not grant writes
-  there — so a confined Pi session cannot repoint its own next launch.
+  there, so a confined Pi session cannot repoint its own next launch.
 - **`PI_EXECUTABLE`** is *ambient*: a project `.envrc`, `Makefile`, or npm lifecycle
   script can set it. It therefore keeps the trusted-prefix restriction.
 
@@ -167,18 +167,18 @@ PI_EXECUTABLE=/opt/homebrew/bin/pi pi --version
 **What binding is not:** it is a *non-ambient host pin*, not an integrity control. A
 same-uid attacker outside the sandbox who can rewrite this config can equally rewrite
 the shim or the Pi install itself. Note also that the trusted-prefix list is a
-path-shape convention rather than a privilege boundary — on a standard Apple-Silicon
+path-shape convention rather than a privilege boundary: on a standard Apple-Silicon
 host `/opt/homebrew/bin`, `/opt/homebrew/lib/node_modules`, and `/opt/homebrew/Cellar`
 are all owned by the unprivileged install user. What the shim does still enforce for
 any source: absolute path, exists and is executable, is not the shim itself (that
-would loop), and is **not inside a Seatbelt write root** — an executable the sandboxed
+would loop), and is **not inside a Seatbelt write root**. An executable the sandboxed
 agent could rewrite would turn one confined session into persistence across every
 later launch.
 
 If the resolved Pi is a `#!/usr/bin/env node` script, bind records the interpreter too
 and the launch becomes `<node> <cli.js>`. Without that record the shebang resolves
-`node` from the shim's sanitized PATH, which has no entry for a version-manager Node —
-so binding is what makes those installs work at all.
+`node` from the shim's sanitized PATH, which has no entry for a version-manager
+Node, so binding is what makes those installs work at all.
 
 ## Environment configuration
 
@@ -225,7 +225,7 @@ intentionally not supported.
 1. The security boundary is **macOS Seatbelt**. A Linux runner cannot compile or
    apply an SBPL profile, so the portable subset it could run would be green while
    saying nothing about the property that matters. A badge like that is worse than
-   no badge — it invites the assumption that the guard was verified.
+   no badge, because it invites the assumption that the guard was verified.
 2. Hosted macOS runners bill at ~10x Linux, for a single-maintainer personal tool
    whose only real deployment target is the maintainer's own Mac.
 
@@ -256,11 +256,11 @@ of what is being pushed:
 | Branch deletion | skipped | — |
 
 Two reasons for this shape. **It gates every branch, not just `main`,** because
-changes land here by squash-merging a PR — GitHub does that server-side, so no
+changes land here by squash-merging a PR, and GitHub does that server-side, so no
 local push to `main` ever happens and a `main`-only gate would never fire on the
 workflow actually in use. **It is tiered** because ~128s of the ~140s total is the
 analyzer path (`test/corpus.mjs` runs 369 cases), and those stages only
-characterize `src/` and `test/corpus/` — running them for a docs edit
+characterize `src/` and `test/corpus/`; running them for a docs edit
 buys nothing while making the gate annoying enough to invite habitual skipping,
 which is the real failure mode.
 
@@ -268,7 +268,7 @@ Override in an emergency: `SKIP_PREPUSH_TESTS=1 git push`.
 
 Optional local-only checks belong in an executable, gitignored
 `.githooks/pre-push.local`, which runs first and blocks the push on a non-zero
-exit — that is where maintainer-specific private tooling goes, so a fork never
+exit, that is where maintainer-specific private tooling goes, so a fork never
 inherits a gate it cannot satisfy.
 
 **If you fork this:** run `npm test` on a Mac before trusting a change to
@@ -285,7 +285,7 @@ Seatbelt boundary applied to arbitrary agent projects.
   `git config core.hooksPath .githooks`).
 - Package install does **not** silently rewrite `core.hooksPath` in unrelated
   consumer repositories.
-- The hook needs only **bash, git, and npm** — the same tools required to work on
+- The hook needs only **bash, git, and npm**, the same tools required to work on
   this repo at all. It gates **every** push, tiering by risk; see
   [The pre-push gate is tiered](#the-pre-push-gate-is-tiered) above for the table.
   Emergency bypass: `SKIP_PREPUSH_TESTS=1 git push`.
@@ -296,15 +296,15 @@ Seatbelt boundary applied to arbitrary agent projects.
 
 ## What is intentionally NOT in the repo
 
-- **`~/.pi/agent/auth.json`, `settings.json`, `trust.json`, `sessions/`** — host
+- **`~/.pi/agent/auth.json`, `settings.json`, `trust.json`, `sessions/`**: host
   state and credentials (and the sandbox denies writing them from inside the
   profile; that is not full token isolation).
-- **Any live link to the analyzer's origin project** — not a dependency, submodule,
+- **Any live link to the analyzer's origin project**: not a dependency, submodule,
   or third-party copy we track, so there is no sync or update-from-upstream workflow.
   `src/validate-bash-command.sh` is a self-contained MIT script **owned and
   maintained in this repository** (it began as an adaptation of an earlier
   MIT-licensed analyzer by the same author, since diverged). Deploy stamps
-  therefore record local file integrity only — they make no parity claim against
+  therefore record local file integrity only, they make no parity claim against
   any external tree. Fix analyzer gaps here, and record any verdict change in
   `test/corpus/corpus.json` and
   [`ARCHITECTURE.md`](ARCHITECTURE.md#known-analyzer-gaps).

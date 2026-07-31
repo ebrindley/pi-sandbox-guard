@@ -3,10 +3,10 @@
 How [pi-sandbox-guard](../README.md) is built, what each layer guarantees, and
 where each one fails. Two layers, and the weaker one is not the fail-safe:
 
-1. **The bash filter** ([layer 1](#layer-1--the-bash-filter)) — a pre-execution
+1. **The bash filter** ([layer 1](#layer-1-the-bash-filter)) is a pre-execution
    policy hook on Pi's `bash` tool. Good error messages and confirm prompts; it
    sees only the literal command string and can be bypassed by dynamic exec.
-2. **The Seatbelt OS sandbox** ([layer 2](#layer-2--the-seatbelt-os-sandbox)) —
+2. **The Seatbelt OS sandbox** ([layer 2](#layer-2-the-seatbelt-os-sandbox)) is
    the **primary** boundary. Catches what the filter cannot: dynamic exec,
    mutated input, non-bash writes outside the project, subprocess escapes.
 
@@ -44,7 +44,7 @@ proof.**
 
 ---
 
-# Layer 1 — the bash filter
+# Layer 1: the bash filter
 
 ## How the analyzer filter works
 
@@ -80,7 +80,7 @@ only defensible degraded behavior is to block everything. Degraded mode does
 Each item closes a specific failure that adversarial review found in an earlier
 revision; none is speculative hardening. This was self-review, not an external
 audit. The launcher/Seatbelt containment track is
-[layer 2](#layer-2--the-seatbelt-os-sandbox).
+[layer 2](#layer-2-the-seatbelt-os-sandbox).
 
 | Risk | Mitigation |
 |---|---|
@@ -90,8 +90,8 @@ audit. The launcher/Seatbelt containment track is
 | Pi has no hard kill → hung agent | Adapter-owned **timeout → SIGTERM the process *group* → SIGKILL** → block |
 | Fragile `decision:reason` parsing | Decision = **exit code only**; stderr is display-only |
 | Relative-path fail-open (`cd /tmp && rm -rf .`) | Subprocess `cwd` set to the **bash tool's intended cwd** |
-| Missing deps silently weaken analysis | **Functional preflight**: each helper (`bash`/`jq`/`awk`) is *executed* (no-op probe) on the trusted PATH, and the pinned Node is probed separately — a present-but-broken helper is caught at load, not per-command; degrade to **block all bash** if any fails |
-| ANSI-C quoted command words (`$'rm' -rf /`) evade the analyzer | **Reveal-only probe**: the original command is always analyzed as-is; ANSI-C spans are also decoded — emitted as single-quoted literals (bash-faithful) so the revealed verb reaches the analyzer without decoded data becoming syntax — and the **worst verdict wins**. Closes direct command-word cases; executor operands (`xargs 'rm'`) reduce to a quoted utility word, which the analyzer treats as the ask tier — see [Known analyzer gaps](#known-analyzer-gaps) |
+| Missing deps silently weaken analysis | **Functional preflight**: each helper (`bash`/`jq`/`awk`) is *executed* (no-op probe) on the trusted PATH, and the pinned Node is probed separately, so a present-but-broken helper is caught at load, not per-command; degrade to **block all bash** if any fails |
+| ANSI-C quoted command words (`$'rm' -rf /`) evade the analyzer | **Reveal-only probe**: the original command is always analyzed as-is; ANSI-C spans are also decoded and emitted as single-quoted literals (bash-faithful), so the revealed verb reaches the analyzer without decoded data becoming syntax, and the **worst verdict wins**. Closes direct command-word cases; executor operands (`xargs 'rm'`) reduce to a quoted utility word, which the analyzer treats as the ask tier. See [Known analyzer gaps](#known-analyzer-gaps) |
 | Windows (no bash) | Detected at preflight → **block all bash**, no fragile WSL spawning |
 | Oversized command | Commands > **32 KB** are blocked before reaching the analyzer (matches analyzer's own size cap) |
 
@@ -103,13 +103,13 @@ Fail-open (or otherwise notable) verdicts in this repository's
 **Where the corpus keeps this honest:** a gap pinned with `expectFail: true`
 in [`test/corpus/corpus.json`](../test/corpus/corpus.json) also pins its current real
 verdict, and the corpus runner **fails `npm test` the moment that verdict moves in
-either direction** — so a fix cannot land unnoticed. Updating the prose here is
+either direction**, so a fix cannot land unnoticed. Updating the prose here is
 still a human step; the runner asks for it, it cannot force it. (That
 mechanism exists because an earlier version of this section kept describing an
 already-fixed gap as open.)
 
 That tripwire covers the gaps narrow enough to pin as a single command. The
-broad classes below — fully dynamic execution most of all — cannot be pinned that
+broad classes below (fully dynamic execution most of all) cannot be pinned that
 way, because there is no one command whose changed verdict would prove the class
 closed. Those are held by the characterization cases and by review, not by an
 automatic tripwire. Read a status here as documented intent, not as a
@@ -117,26 +117,26 @@ machine-verified claim.
 
 Status legend:
 
-- **OPEN (fail-open)** — the analyzer allows something it should block, and no
+- **OPEN (fail-open)**: the analyzer allows something it should block, and no
   guard-level mitigation covers it. The OS sandbox layer is the backstop.
-- **MITIGATED** — the analyzer-level gap still exists, but the guard closes it
+- **MITIGATED**: the analyzer-level gap still exists, but the guard closes it
   before/around the analyzer.
-- **FIXED** — kept as history so the corpus case documents the regression test.
+- **FIXED**: kept as history so the corpus case documents the regression test.
 
-### 0. Backslash-newline line continuations — MITIGATED (guard-level probe)
+### 0. Backslash-newline line continuations: MITIGATED (guard-level probe)
 
 **Analyzer status:** fail-open. **Guard status:** blocked.
 
 Bash removes `\<newline>` line continuations *before* tokenization, so
 `r\<newline>m -rf /` runs as `rm -rf /`. The analyzer does not preprocess these
-(independent of ANSI-C — plain reassembly slips past too). The guard adds a
+(independent of ANSI-C; plain reassembly slips past too). The guard adds a
 reveal-only probe variant that strips continuations and analyzes the result,
 worst-of merged. It composes with the ANSI-C probe (`$'r'\<newline>m -rf /` is
 caught). Continuation removal is context-free in bash, so the transform is
-exact — corpus-pinned, benign multi-line commands (`git commit \<newline> -m …`)
+exact and corpus-pinned; benign multi-line commands (`git commit \<newline> -m …`)
 stay allowed.
 
-### 1. ANSI-C quoted command words — MITIGATED (guard-level probe)
+### 1. ANSI-C quoted command words: MITIGATED (guard-level probe)
 
 **Analyzer status:** still fail-open on raw `$'...'` as a *command word*.
 **Guard status:** blocked for direct command words and for executor operands
@@ -169,29 +169,29 @@ stays a benign echo). The scanner is context-aware:
   decoded newline is a real command separator in the inner shell
   (`bash -c $'echo ok\nrm -rf /'` runs the `rm`), so the probe must expose the
   second line. The cost is that a plain multiline `echo $'a\nrm -rf /'` may be
-  over-flagged — a deliberate reveal-only trade (never fail open > avoid false
+  over-flagged: a deliberate reveal-only trade (never fail open > avoid false
   asks).
 
 A probe inaccuracy can therefore only over-block, never fail open. Covered by
 corpus cases and `test/smoke.mjs`.
 
 Other quoting variants (`'rm' -rf /`, `"rm" -rf /`, `\rm -rf /`) are handled by
-the analyzer natively — corpus-pinned.
+the analyzer natively, and are corpus-pinned.
 
 **Executor operands:** the probe reduces `xargs $'rm'` to `xargs 'rm'`. The
 analyzer now treats quoted executor utility words the same as unquoted ones
-(warn tier), so that composition is closed — see the gap 3 FIXED history.
+(warn tier), so that composition is closed. See the gap 3 FIXED history.
 
-### 2. `shred`, `truncate`, and builtin-redirect writes to critical paths — FIXED
+### 2. `shred`, `truncate`, and builtin-redirect writes to critical paths: FIXED
 
 Previously the analyzer's device/critical-path rules keyed on a closed verb set
 (`dd`, `mkfs`, `wipefs`, `rm`, `mv`, `cp`, …) and a single redirect form
 (`> /dev/sd[a-z]`), so these were **allowed**:
 
 ```bash
-shred /dev/sda          # was ALLOWED — raw device destruction
-truncate -s 0 /etc/passwd   # was ALLOWED — critical file truncation
-: > /etc/passwd         # was ALLOWED — builtin redirect, no command word
+shred /dev/sda          # was ALLOWED: raw device destruction
+truncate -s 0 /etc/passwd   # was ALLOWED: critical file truncation
+: > /etc/passwd         # was ALLOWED, builtin redirect, no command word
 ```
 
 **Fix (analyzer):**
@@ -209,7 +209,7 @@ truncate -s 0 /etc/passwd   # was ALLOWED — critical file truncation
 
 Corpus-pinned (malicious + benign controls).
 
-### 3. Fully dynamic execution — OPEN by design
+### 3. Fully dynamic execution: OPEN by design
 
 The analyzer operates on the literal command string only. Destructive intent
 assembled at runtime is not statically detectable:
@@ -226,27 +226,27 @@ and quoted forms (`xargs 'rm'`, `parallel 'rm'`, `find . -exec 'rm' …`) now ma
 the same tier via quote-aware utility-word checks.
 
 **ANSI-C reconstructed via outer-shell quote removal in a nested `shell -c`
-(OPEN, fail-open — accepted static-analysis boundary).** The analyzer recurses
+(OPEN, fail-open, accepted static-analysis boundary).** The analyzer recurses
 into `shell -c` payloads and even resolves the single-quote-escape idiom for a
-*plain* verb — `bash -c 'r'\''m'\'' -rf /'` blocks. What slips past is the idiom
+*plain* verb, `bash -c 'r'\''m'\'' -rf /'` blocks. What slips past is the idiom
 reassembling an **ANSI-C** span for the inner shell to decode:
 
 ```bash
-bash -c 'r'\''m'\'' -rf /'      # BLOCKED  — analyzer resolves the reassembled `rm`
-bash -c '$'\''rm'\'' -rf /'     # ALLOWED  — reassembles `$'rm'`; inner shell decodes it, analyzer does not
+bash -c 'r'\''m'\'' -rf /'      # BLOCKED , analyzer resolves the reassembled `rm`
+bash -c '$'\''rm'\'' -rf /'     # ALLOWED , reassembles `$'rm'`; inner shell decodes it, analyzer does not
 ```
 
 The guard's ANSI-C probe cannot help: the `$'rm'` bytes are **not contiguous** in
-the source — they are reconstructed by outer-shell quote removal — so there is no
+the source, they are reconstructed by outer-shell quote removal, so there is no
 `$'...'` span for the probe to decode. (Contiguous forms ARE covered:
 `bash -c "$'rm' -rf /"` and `bash -c "\$'rm' -rf /"` both block.) Closing this
-needs the analyzer to decode ANSI-C on reassembled `shell -c` operands — the same
-dynamic-assembly class as `eval` (gap 3) — and is backstopped by the OS sandbox.
+needs the analyzer to decode ANSI-C on reassembled `shell -c` operands, the same
+dynamic-assembly class as `eval` (gap 3), and is backstopped by the OS sandbox.
 
 Corpus pins this with `expectFail: true` / `actual: "allow"` so a future fix
 surfaces as a test failure asking for a deliberate corpus + docs update.
 
-**Executor + quoted command word — FIXED.** Executor warn-rules previously
+**Executor + quoted command word, FIXED.** Executor warn-rules previously
 matched only an *unquoted* command word, so a quoted verb slipped past:
 
 ```bash
@@ -261,7 +261,7 @@ after `xargs` / `parallel` / `find -exec` like a dequoted `rm` (warn tier).
 Protected-path find forms remain block-tier. Benign controls (`xargs echo`,
 `find . -exec echo`, `parallel echo`) stay allow.
 
-### 4. Protected path as first operand — FIXED (regression-pinned)
+### 4. Protected path as first operand: FIXED (regression-pinned)
 
 An earlier snapshot of the analyzer allowed `rm /etc/passwd` and `mv /etc /tmp/etc.bak`
 because the critical-directory regex required a preceding field. The current
@@ -269,10 +269,10 @@ snapshot blocks both. Kept here because the corpus pins the fixed behavior
 (`rm /etc/passwd` → block, `mv /etc /tmp/etc.bak` → block, `sudo` variants
 included) so a future analyzer change cannot silently reintroduce it.
 
-### 5. Literal interpreter payloads — FIXED (v3.15); dynamic payloads remain OPEN
+### 5. Literal interpreter payloads: FIXED (v3.15); dynamic payloads remain OPEN
 
 **Literal payloads (FIXED / regression-pinned).** The analyzer previously allowed
-destructive intent expressed only inside a language runtime one-liner — the
+destructive intent expressed only inside a language runtime one-liner, the
 command word was `python3`/`node`/`perl`/`ruby`/`awk`, so shell-level `rm`/`chmod`
 rules never saw the body. v3.15 adds a conservative scan of *literal* code
 strings for:
@@ -312,7 +312,7 @@ python3 -c "exec(bytes.fromhex(h))"  # intent assembled only at runtime
 ```
 
 Closing the dynamic class would require runtime interception or full program
-analysis — not a static argv string matcher. Do not re-label these as FIXED when
+analysis, not a static argv string matcher. Do not re-label these as FIXED when
 only the literal path is covered.
 
 ### What the gaps add up to
@@ -321,8 +321,8 @@ pi-sandbox-guard is a **best-effort guard** at this layer, not an airtight
 barrier, even when the analyzer is fully healthy. It significantly raises the bar
 for accidental catastrophic commands and handles the common explicit patterns
 well. It does not constitute a security boundary against a determined or informed
-adversary — that is what
-[layer 2](#layer-2--the-seatbelt-os-sandbox) is for.
+adversary, that is what
+[layer 2](#layer-2-the-seatbelt-os-sandbox) is for.
 
 Open gaps should be fixed in this repository's
 `src/validate-bash-command.sh`; the corpus turns a change to any behavior it
@@ -330,7 +330,7 @@ covers into an explicit verdict diff.
 
 ---
 
-# Layer 2 — the Seatbelt OS sandbox
+# Layer 2: the Seatbelt OS sandbox
 
 This is the **primary out-of-project write boundary**. Even if the filter above
 is bypassed (dynamic exec, mutated `event.input`, an analyzer gap, or a bug), the
@@ -354,7 +354,7 @@ project-controlled content (hooks, `package.json` scripts, Makefiles, etc.).
 | Concern | Why |
 |---|---|
 | General confidentiality | Most project files remain readable; only selected host paths and `.env` are read-denied |
-| Provider-token secrecy from Pi / tool children | Tokens needed in-process; see [SECURITY.md](../SECURITY.md) — needs broker/VM/upstream, not only `auth.json` write-deny |
+| Provider-token secrecy from Pi / tool children | Tokens needed in-process; see [SECURITY.md](../SECURITY.md), needs broker/VM/upstream, not only `auth.json` write-deny |
 | Open network | `web_search` / local model servers / package installs require it; no egress allowlist today |
 | Process availability | No process-count cap; optional `PI_RLIMIT_CPU` only |
 
@@ -402,11 +402,11 @@ does).
 The coordinated deploy, status/drift, and **explicit** repo git-hook setup
 commands are:
 
-- `npm run deploy:all` — preflight both artifacts, one shared release identity,
+- `npm run deploy:all`, preflight both artifacts, one shared release identity,
   partial-failure reporting / safe rollback where possible
-- `npm run status` — read-only source vs installed hash / identity check (no
+- `npm run status`, read-only source vs installed hash / identity check (no
   auth state)
-- Explicit hook setup (e.g. `npm run setup:hooks`) — **replaces** relying on
+- Explicit hook setup (e.g. `npm run setup:hooks`), **replaces** relying on
   package `prepare` to mutate `core.hooksPath` on install
 
 Component-only deployment remains available through `deploy` and
@@ -418,7 +418,7 @@ Component-only deployment remains available through `deploy` and
 - the **project**, resolved in priority order: `PI_PROJECT` if set → else
   `git rev-parse --show-toplevel` (so launching from a subdir makes the whole repo
   writable) → else the current directory `$PWD`. The `$PWD` fallback means a
-  **brand-new, not-yet-git directory works** — the agent can `git init` and
+  **brand-new, not-yet-git directory works**, the agent can `git init` and
   scaffold a fresh project. Only genuinely broad roots are refused (see below).
 - `$TMPDIR` (canonical, validated) and `/private/tmp`
 - `~/.pi/agent` **except** `settings.json`, `auth.json`, `trust.json`,
@@ -434,14 +434,14 @@ as listed):
   (`~/.git-credentials`, `~/.config/git/credentials`), `~/.netrc`, `~/.npmrc`,
   `~/.secrets`
 - `.env` files anywhere (the one project-wide secret deny)
-- `~/.pi/agent/security-events.log` — the analyzer logs the **full text** of
+- `~/.pi/agent/security-events.log`, the analyzer logs the **full text** of
   every flagged command there; appending still works but the sandboxed process
   cannot read the history back
 
 **Write-re-denied after the PROJECT allow** (symlink defense; last-match-wins):
 credential subtrees (`~/.ssh`, `~/.aws`, `~/.docker`, `~/.gnupg`, `~/.kube`,
 `~/.config/{gh,gcloud}`) plus the poisonable single files `~/.git-credentials`,
-`~/.config/git/credentials`, `~/.netrc`, `~/.npmrc`, and `~/.secrets` — a write
+`~/.config/git/credentials`, `~/.netrc`, `~/.npmrc`, and `~/.secrets`, a write
 there would arm a credential-exfil vector for the next unsandboxed run.
 
 Also re-denied: **active git hook trees** used for persistence/escape. The whole
@@ -460,16 +460,16 @@ implementation denies the
 
 `.git/config` remains writable for routine `git remote` / tracking use. That
 means residual risk remains if config can repoint hooks or aliases in ways the
-profile does not yet cover — see **Persistence risks** below. Git run *through*
+profile does not yet cover, see **Persistence risks** below. Git run *through*
 the protected `pi` shim stays confined regardless; the danger is the **next
 unsandboxed** host `git`/build.
 
-**Network:** not restricted — `web_search`/`web_fetch` and any local model server
+**Network:** not restricted, `web_search`/`web_fetch` and any local model server
 must work. Filesystem write-containment is the high-value
 layer; an outbound allowlist is a separate product decision.
 
 **Resource limits:** conservative `ulimit` (file size ~2 GB, core off; optional
-`PI_RLIMIT_CPU`). No process-count cap — it broke `fork()` at low values.
+`PI_RLIMIT_CPU`). No process-count cap, it broke `fork()` at low values.
 
 ## Environment trust and pre-sandbox hardening
 
@@ -483,7 +483,7 @@ The protected launcher/preamble is the **environment trust root**. Before
 | **Identity** | Derive login home/identity from system sources (`/usr/bin/id`, directory services), not ambient `USER` spoofing |
 | **TMPDIR** | Canonicalize and validate before passing to Seatbelt; reject `TMPDIR=/`, `TMPDIR=$HOME`, project roots, and other wideners; accept normal Darwin per-user temp and `/private/tmp` |
 | **Config** | Pin executable config to trusted host state (`~/.config/pi-sandbox-guard/…`); refuse repo-controlled ambient `PI_EXECUTABLE_CONFIG`; apply trusted-prefix rules to absolute paths from config |
-| **Nested handling** | Transparent own-shim re-entry only with a matching profile digest plus behavioral boundary probes; generic `CODEX_SANDBOX` / `SANDBOX_*` markers alone are **not** equivalent policy — unknown parent sandboxes fail closed |
+| **Nested handling** | Transparent own-shim re-entry only with a matching profile digest plus behavioral boundary probes; generic `CODEX_SANDBOX` / `SANDBOX_*` markers alone are **not** equivalent policy, unknown parent sandboxes fail closed |
 | **Active hooks** | Deny effective active hooks trees (see above), including hooksPath / worktree / submodule surfaces as integrated |
 
 Trust model summary: **host install + protected shim + Seatbelt profile** are
@@ -507,7 +507,7 @@ it may pass through to the real Pi instead of double-wrapping. Explicit
 non-transparent launchers retain fail-closed nested-sandbox behavior. Unknown
 parent sandboxes are not trusted by env marker alone.
 
-A non-git directory is **not** refused — it falls back to `$PWD` (so new projects
+A non-git directory is **not** refused, it falls back to `$PWD` (so new projects
 work). Refusal is strictly about over-broad boundaries, not "is this a repo".
 
 ### Bypass
@@ -522,15 +522,15 @@ guard extension may still load, but the Seatbelt layer is bypassed.
 Even with active-hook write denials, treat the following as **live operational
 risks**, not fully solved problems:
 
-1. **Planted content inside PROJECT** — scripts, CI configs, build files, and
+1. **Planted content inside PROJECT**, scripts, CI configs, build files, and
    source that run later **outside** Seatbelt when *you* invoke unsandboxed tools.
-2. **`core.hooksPath` / git config** — writable `.git/config` can still influence
+2. **`core.hooksPath` / git config**, writable `.git/config` can still influence
    future unsandboxed git behavior; ACTIVE_HOOKS denial reduces but does not
    eliminate all git-mediated persistence designs.
-3. **Submodules and linked worktrees** — additional hook and metadata paths exist
+3. **Submodules and linked worktrees**, additional hook and metadata paths exist
    under `.git/modules/**` and worktree git dirs; profile coverage is aimed at
    those surfaces, but operators should still inspect submodule/worktree changes.
-4. **Unsandboxed follow-up commands** — `git commit`/`push`, `npm install`,
+4. **Unsandboxed follow-up commands**, `git commit`/`push`, `npm install`,
    `make`, IDE tasks, and CI on a developer machine execute project-controlled
    code without this Seatbelt profile.
 
@@ -541,20 +541,20 @@ not.
 
 ## Known limitations (need an unsandboxed direct Pi run)
 
-- **Private npm registries / auth** — `~/.npmrc` is read-denied and
+- **Private npm registries / auth**: `~/.npmrc` is read-denied and
   `NPM_CONFIG_USERCONFIG=/dev/null` is set, so public npm works but private
   registries/tokens/proxies do not.
-- **git over SSH** — `~/.ssh` is read-denied, so `git push`/`pull` over SSH fails.
+- **git over SSH**: `~/.ssh` is read-denied, so `git push`/`pull` over SSH fails.
   The launcher also clears `SSH_AUTH_SOCK` before exec. HTTPS git works.
-- **Project `.env` reads** — denied even inside the project. Tools that load
+- **Project `.env` reads**: denied even inside the project. Tools that load
   `.env` at runtime won't see it under the sandbox.
-- **Writing outside the project** — by design. If a task legitimately needs to
+- **Writing outside the project**: by design. If a task legitimately needs to
   write elsewhere, set `PI_PROJECT` to a wider safe project root or call the real
   Pi binary directly for an unsandboxed run.
 - **Network and general reads are intentionally not blocked.** The sandbox
   denies selected credential reads and confines writes; it is not a complete
   confidentiality boundary or outbound-network control.
-- **Provider tokens in the Pi process** — write-denying `auth.json` stops
+- **Provider tokens in the Pi process**: write-denying `auth.json` stops
   *tampering* with stored auth from inside the sandbox; it does **not** hide
   tokens already loaded by Pi or tool children. See [SECURITY.md](../SECURITY.md).
 
@@ -571,7 +571,7 @@ not.
 Via a sandboxed launcher against a local model, in a git project whose path
 contains a space:
 - in-project write **succeeds**; write to `$HOME` is **kernel-denied**
-  ("Operation not permitted") — and a plain `echo > $HOME/file` is *not* something
+  ("Operation not permitted"), and a plain `echo > $HOME/file` is *not* something
   the analyzer would flag, demonstrating the layers are complementary
 - `settings.json` / `extensions/` tamper denied; `~/.ssh` read denied
 - home canary untouched; zero spurious EPERM warnings
