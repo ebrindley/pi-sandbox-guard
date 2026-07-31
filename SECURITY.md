@@ -31,6 +31,9 @@ Primary boundary: **out-of-project filesystem writes** (and selected host
 credential-path denies) via Seatbelt. The analyzer improves operator experience
 and catches some catastrophic literal bash forms; it is **not** the fail-safe.
 
+How both layers work, their invariants, and known analyzer gaps:
+[docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
+
 ## Explicit non-goals (current scope)
 
 The following are **outside current scope** by design, not unfinished checkboxes:

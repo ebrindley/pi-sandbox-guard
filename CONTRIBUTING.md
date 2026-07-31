@@ -16,8 +16,8 @@ Especially valuable:
   much as false negatives: a guard that asks too often trains people to click
   through, which is worse than not asking at all.
 - **A bypass of a documented protection.** Check
-  [KNOWN_ANALYZER_GAPS.md](KNOWN_ANALYZER_GAPS.md) first — some gaps are known and
-  documented rather than unnoticed.
+  [Known analyzer gaps](docs/ARCHITECTURE.md#known-analyzer-gaps) first — some gaps
+  are known and documented rather than unnoticed.
 
 ## Pull requests are not accepted
 
@@ -56,10 +56,10 @@ Two things worth knowing:
   corpus failure, which is the intended tripwire.
 - `npm run setup:hooks` installs a tiered pre-push gate: `npm run test:fast`
   (~12s) on any branch push, escalating to the full `npm test` (~140s) when the
-  pushed range touches `src/`, `vendor/`, or `test/corpus/`, when the remote ref
+  pushed range touches `src/` or `test/corpus/`, when the remote ref
   is new, or when the target is `main`. It needs only bash, git, and npm — no tool
   you don't already have. Bypass with `SKIP_PREPUSH_TESTS=1 git push`; extend it
   locally with an executable, gitignored `.githooks/pre-push.local`.
-- `KNOWN_ANALYZER_GAPS.md` records deliberate, documented gaps. Closing one is
-  welcome in your fork, but check that it does not trade a rare bypass for a
-  common false positive.
+- [`docs/ARCHITECTURE.md`](docs/ARCHITECTURE.md#known-analyzer-gaps) records
+  deliberate, documented gaps. Closing one is welcome in your fork, but check that
+  it does not trade a rare bypass for a common false positive.
