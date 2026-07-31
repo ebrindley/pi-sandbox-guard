@@ -17,11 +17,11 @@ landing.
 ## Install
 
 ```bash
-git clone https://github.com/ebrindley/pi-sandbox-guard.git
-cd pi-sandbox-guard && npm run setup
+git clone https://github.com/ebrindley/pi-sandbox-guard.git && cd pi-sandbox-guard && npm run setup
 ```
 
-That is the whole install. It deploys the bash filter, the Seatbelt profile, and
+That is the whole install — one line, no `npm install` first (there are no
+dependencies). It deploys the bash filter, the Seatbelt profile, and
 a protected `pi` shim, records which Pi to launch, and finally checks that a
 plain `pi` actually resolves to the shim — if `~/.local/bin` is missing from your
 `PATH` or sits after the real Pi, setup fails and tells you what to add where.

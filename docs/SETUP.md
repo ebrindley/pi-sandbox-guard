@@ -40,11 +40,12 @@ Full model: [SECURITY.md](../SECURITY.md) and [SANDBOX.md](SANDBOX.md).
 #   - ensure /bin/zsh exists and bash, jq, awk are on PATH (all ship with macOS 15+)
 #   - macOS with /usr/bin/sandbox-exec for the OS sandbox layer
 
-git clone https://github.com/ebrindley/pi-sandbox-guard.git && cd pi-sandbox-guard
+# The short version, and all you need on a clean machine:
+git clone https://github.com/ebrindley/pi-sandbox-guard.git && cd pi-sandbox-guard && npm run setup
 
-# The short version: `npm run setup` is steps 1 and 2 together, accepting the
-# detected Pi install without prompting. Run them separately as below when you
-# want to review the detected install or redo one step on its own.
+# `npm run setup` is steps 1-3 below, accepting the detected Pi install without
+# prompting. Run them separately when you want to review the detected install or
+# redo one step on its own.
 
 # 1. deploy the bash filter + Seatbelt profile + protected pi shim
 npm run deploy:all
@@ -52,13 +53,16 @@ npm run deploy:all
 # 2. record which Pi install the shim should launch (once per machine)
 npm run bind
 
-# 3. optional: confirm installed copies match this checkout
+# 3. confirm a plain `pi` resolves to the shim, not the real Pi
+npm run check:path
+
+# 4. optional: confirm installed copies match this checkout
 npm run status
 
-# 4. optional: install your own wrappers from OUTSIDE this repo
+# 5. optional: install your own wrappers from OUTSIDE this repo
 npm run deploy:launchers -- --extra-launchers ~/my-pi-launchers
 
-# 4. run from a project directory
+# 6. run from a project directory
 cd /some/git/repo && pi   # a repo, OR a fresh dir to scaffold (git init etc.)
 ```
 
