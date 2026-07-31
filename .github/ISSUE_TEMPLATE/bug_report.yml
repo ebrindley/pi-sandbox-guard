@@ -1,0 +1,65 @@
+name: Bug report
+description: A wrong verdict, a crash, or a deployment problem
+labels: [bug]
+body:
+  - type: markdown
+    attributes:
+      value: |
+        For a wrong verdict, the command string and the two verdicts (expected vs
+        actual) are usually enough to reproduce. Please do not paste anything
+        containing real credentials, tokens, or private paths — redact first.
+
+        If this is a way to make the guard allow something catastrophic, or to
+        disarm it, close this and file a
+        [private advisory](https://github.com/ebrindley/pi-sandbox-guard/security/advisories/new)
+        instead.
+  - type: textarea
+    id: command
+    attributes:
+      label: Command string
+      description: The exact bash command handed to the guard. Redact any secrets or personal paths.
+      render: shell
+    validations:
+      required: true
+  - type: dropdown
+    id: expected
+    attributes:
+      label: Verdict you expected
+      options: [allow, ask, block]
+    validations:
+      required: true
+  - type: dropdown
+    id: actual
+    attributes:
+      label: Verdict you got
+      options: [allow, ask, block, crash / error, guard unavailable (block-all)]
+    validations:
+      required: true
+  - type: textarea
+    id: why
+    attributes:
+      label: Why that is wrong
+      description: >
+        For a false negative, what damage the command would do. For a false
+        positive, why the command is ordinary. This is the part that decides
+        whether a change is worth its false-positive cost.
+    validations:
+      required: true
+  - type: textarea
+    id: env
+    attributes:
+      label: Environment
+      description: "Output of: `sw_vers -productVersion`, `node --version`, `git --version`, and `npm run preflight`"
+      render: shell
+    validations:
+      required: true
+  - type: dropdown
+    id: deployment
+    attributes:
+      label: Deployment
+      options:
+        - Seatbelt sandbox + bash filter (the supported setup)
+        - Bash filter only (no Seatbelt)
+        - Not sure
+    validations:
+      required: true

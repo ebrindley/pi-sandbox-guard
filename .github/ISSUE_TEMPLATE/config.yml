@@ -1,0 +1,13 @@
+# Blank issues stay enabled on purpose. The bug template requires a command
+# string and both verdicts, which a feature request cannot supply — and
+# SECURITY.md tells a reporter whose advisory link is unavailable to open a
+# public issue saying only that they have a private report to make. Both need a
+# form that asks for nothing.
+blank_issues_enabled: true
+contact_links:
+  - name: Security vulnerability
+    url: https://github.com/ebrindley/pi-sandbox-guard/security/advisories/new
+    about: Report privately, not as a public issue. A reliable way to make the guard allow something catastrophic belongs here.
+  - name: Known analyzer gaps
+    url: https://github.com/ebrindley/pi-sandbox-guard/blob/main/KNOWN_ANALYZER_GAPS.md
+    about: Check whether the behavior you found is already a documented, deliberate gap.

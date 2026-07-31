@@ -1,0 +1,13 @@
+node_modules/
+*.log
+.DS_Store
+dist/
+*.tgz
+.env
+.env.*
+.vscode/
+.idea/
+# Optional untracked local pre-push extension (see .githooks/pre-push).
+.githooks/pre-push.local
+# Maintainer-local release runbook (host-specific; not part of the public repo).
+docs/RELEASE.md

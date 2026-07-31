@@ -1,0 +1,39 @@
+#!/bin/zsh -f
+set -euo pipefail
+
+# Protected Pi entrypoint. Install this earlier on PATH than the real Pi binary.
+# It applies the macOS Seatbelt profile, then execs the real Pi resolved by the
+# preamble from config or PATH with this shim's directory removed.
+#
+# Security-critical assignments are readonly where zsh permits so ambient env or
+# a compromised intermediate cannot re-point the protected entry.
+
+typeset -r PI_SANDBOX_TRANSPARENT=1
+typeset -r PI_SANDBOX=1
+PI_EXECUTABLE_KEY="${PI_EXECUTABLE_KEY:-${0:t}}"
+typeset -r PI_SANDBOX_SHIM_PATH="${0:A}"
+typeset -r PI_SANDBOX_INSTALL_DIR="${0:A:h}"
+typeset -r PI_SANDBOX_PROFILE="$PI_SANDBOX_INSTALL_DIR/pi-sandbox.sb"
+typeset -r PREAMBLE="$PI_SANDBOX_INSTALL_DIR/pi-sandbox-preamble.zsh"
+
+if [ ! -f "$PREAMBLE" ]; then
+  print -u2 -- "[pi-sandbox-guard] sandbox preamble missing ($PREAMBLE); refusing to launch."
+  exit 1
+fi
+
+source "$PREAMBLE"
+
+# Nested own-shim re-entry marker (paired with profile/boundary markers from preamble).
+export PI_SANDBOX_SHIM_ACTIVE=1
+# The digest is a coincidence check, not a secret. Behavioral probes verify the
+# recorded project and active-hooks boundaries before nested pass-through.
+if [ -n "${PI_SANDBOX_PROFILE_DIGEST:-}" ]; then
+  export PI_SANDBOX_PROFILE_DIGEST
+fi
+
+# PI_LAUNCH_VECTOR is (executable) normally, or (interpreter executable) when the
+# resolved target is a `node` shebang script and an interpreter was recorded. Execing
+# the vector instead of "$PI_EXECUTABLE" is what makes a recorded interpreter real:
+# otherwise the shebang would resolve `node` from the sanitized PATH, which has no
+# entry for nvm/fnm/volta/asdf/mise installs.
+exec "${PI_SANDBOX_CMD[@]}" "${PI_LAUNCH_VECTOR[@]}" "$@"

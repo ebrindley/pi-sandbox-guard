@@ -1,0 +1,82 @@
+{
+  "name": "@ebrindley/pi-sandbox-guard",
+  "version": "0.1.0",
+  "description": "Fail-closed macOS Seatbelt sandbox for the Pi coding agent: writes and deletes outside your project are denied at the kernel, bar an explicit allow-list (temp dirs, tool caches). Plus a pre-execution bash-command filter. Requires a deploy step; npm install alone does not activate it.",
+  "author": "Ed Brindley",
+  "type": "module",
+  "main": "src/index.mjs",
+  "exports": {
+    ".": "./src/index.mjs",
+    "./core": "./src/guard-core.mjs"
+  },
+  "types": "src/pi-types.d.ts",
+  "pi": {
+    "extensions": [
+      "./src/index.mjs"
+    ]
+  },
+  "files": [
+    "src/",
+    "test/",
+    "vendor/validate-bash-command.sh",
+    "vendor/README.md",
+    "sandbox/",
+    "config/",
+    "launchers/",
+    "scripts/",
+    "docs/SANDBOX.md",
+    "docs/SETUP.md",
+    "README.md",
+    "SECURITY.md",
+    "KNOWN_ANALYZER_GAPS.md"
+  ],
+  "scripts": {
+    "setup:hooks": "bash scripts/setup-hooks.sh",
+    "test": "node test/smoke.mjs && node test/corpus.mjs && node test/adapter.mjs && node test/degraded.mjs && node test/shim.mjs && node scripts/check-launchers.mjs && bash scripts/test-sandbox-profile.sh",
+    "test:fast": "node test/adapter.mjs && node test/degraded.mjs && node test/shim.mjs && node scripts/check-launchers.mjs && bash scripts/test-sandbox-profile.sh",
+    "test:analyzer": "node test/smoke.mjs && node test/corpus.mjs",
+    "test:smoke": "node test/smoke.mjs",
+    "test:corpus": "node test/corpus.mjs",
+    "test:adapter": "node test/adapter.mjs",
+    "test:degraded": "node test/degraded.mjs",
+    "test:sandbox-profile": "bash scripts/test-sandbox-profile.sh",
+    "test:ops": "bash scripts/test-ops.sh",
+    "check:launchers": "node scripts/check-launchers.mjs",
+    "deploy": "bash scripts/deploy-local.sh",
+    "deploy:launchers": "bash scripts/deploy-launchers.sh",
+    "deploy:all": "bash scripts/deploy-all.sh",
+    "setup": "bash scripts/deploy-all.sh && bash scripts/bind-executable.sh --detect --yes && bash scripts/check-path.sh",
+    "check:path": "bash scripts/check-path.sh",
+    "bind": "bash scripts/bind-executable.sh",
+    "status": "bash scripts/status.sh",
+    "preflight": "node -e \"import('./src/guard-core.mjs').then(m=>m.preflight()).then(r=>{console.log(JSON.stringify(r,null,2));process.exit(r.ok?0:1)})\""
+  },
+  "keywords": [
+    "pi-package",
+    "pi",
+    "pi-coding-agent",
+    "ai-agent",
+    "security",
+    "guardrail",
+    "destructive-commands",
+    "rm-rf"
+  ],
+  "engines": {
+    "node": ">=18"
+  },
+  "os": [
+    "darwin"
+  ],
+  "publishConfig": {
+    "access": "public"
+  },
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ebrindley/pi-sandbox-guard.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ebrindley/pi-sandbox-guard/issues"
+  },
+  "homepage": "https://github.com/ebrindley/pi-sandbox-guard#readme",
+  "license": "MIT"
+}

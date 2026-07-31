@@ -1,0 +1,4 @@
+# Single maintainer. External pull requests are not accepted
+# (see CONTRIBUTING.md); this exists so review requests and
+# security-advisory notifications route correctly.
+* @ebrindley

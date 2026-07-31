@@ -1,0 +1,127 @@
+#!/usr/bin/env bash
+#
+# pre-push — run a risk-scaled local gate before pushing.
+#
+# Self-contained: needs only bash, git, and npm. Nothing here requires a tool
+# that is not already needed to work on this repository, so a fork can run
+# `npm run setup:hooks` and get a working gate.
+#
+# WHY EVERY BRANCH, NOT JUST main: this repository has no hosted CI (see
+# docs/SETUP.md). Changes land on main by squash-merging a PR, which GitHub
+# performs server-side — no local push to main ever happens. A main-only gate
+# therefore never fires on the workflow actually in use, leaving nothing
+# automated at all. Gating branch pushes runs the checks before code can reach a
+# PR, which is where they are useful.
+#
+# WHY TIERED: the full suite is ~140s, and ~128s of that is the analyzer path
+# (test/corpus.mjs at 369 cases ~110s, test/smoke.mjs ~18s). Paying that on every
+# push to every scratch branch would make ordinary work unpleasant enough to
+# invite SKIP_PREPUSH_TESTS as a habit, which is worse than a slower gate. So:
+#
+#   every push        -> npm run test:fast   (~12s: adapter, degraded, shim,
+#                                             launcher lint, live SBPL profile)
+#   analyzer touched  -> npm test            (full, adds smoke + corpus)
+#   push to main      -> npm test            (full, belt and braces)
+#
+# "Analyzer touched" means src/, vendor/, or test/corpus/ differs in the range
+# being pushed. Those are the only paths the corpus characterizes, so skipping it
+# elsewhere loses no signal. When the remote ref is new (no remote SHA yet) the
+# range is unknown, so the full suite runs rather than guessing.
+#
+# Skip (emergency only): SKIP_PREPUSH_TESTS=1 git push
+#
+# Optional local extension: if .githooks/pre-push.local exists and is
+# executable, it runs first and receives the ref lines on stdin. A non-zero
+# exit blocks the push. It is untracked and gitignored — a maintainer can wire
+# extra local validation there without putting a private dependency in the
+# tracked hook. Absent or non-executable, it is silently skipped.
+
+set -euo pipefail
+
+REF_LINES=$(cat)
+
+HOOK_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOCAL_HOOK="$HOOK_DIR/pre-push.local"
+
+if [[ -x "$LOCAL_HOOK" ]]; then
+  if ! printf '%s\n' "$REF_LINES" | "$LOCAL_HOOK" "$@"; then
+    echo "Error: local pre-push extension failed; push blocked." >&2
+    echo "       Extension: $LOCAL_HOOK" >&2
+    exit 1
+  fi
+fi
+
+if [[ "${SKIP_PREPUSH_TESTS:-}" == "1" ]]; then
+  echo "Warning: skipping pre-push tests (SKIP_PREPUSH_TESTS=1)."
+  exit 0
+fi
+
+# Classify the push: is anything being pushed at all, does it target main, and
+# does the pushed range touch the analyzer?
+pushing=false
+is_main=false
+analyzer_touched=false
+no_base=false
+
+# Paths the corpus/smoke stages characterize. Anything else cannot change their
+# verdicts, so the slow tier is not informative for it.
+# Beyond the analyzer's own sources, this list covers the things that DEFINE the
+# gate, so it cannot be weakened under the fast tier:
+#   - test/smoke.mjs, test/corpus.mjs are the slow tier's runners. Listed
+#     explicitly because `test/corpus` as a pathspec matches only the directory
+#     test/corpus/, not the sibling file test/corpus.mjs — without them, editing a
+#     slow test would take the fast tier and never execute the test being changed.
+#   - package.json holds the test/test:fast/test:analyzer scripts. Editing them is
+#     editing the gate itself, so that always earns the full suite.
+analyzer_paths=(src vendor test/corpus test/smoke.mjs test/corpus.mjs package.json)
+
+while read -r _local_ref local_sha remote_ref remote_sha; do
+  [[ -n "${local_sha:-}" && -n "${remote_ref:-}" ]] || continue
+  # All-zero local SHA means a branch deletion — nothing to test.
+  [[ "$local_sha" =~ ^0+$ ]] && continue
+  pushing=true
+
+  case "$remote_ref" in
+    refs/heads/main|refs/heads/master) is_main=true ;;
+  esac
+
+  if [[ -z "${remote_sha:-}" || "$remote_sha" =~ ^0+$ ]]; then
+    # New remote ref: no base to diff against, so do not guess — run everything.
+    # Tracked separately from analyzer_touched purely so the reason reported below
+    # is accurate; conflating them made a comment-only push announce "analyzer
+    # paths changed", which sends the next reader looking for a change that is not
+    # in the diff.
+    no_base=true
+  elif ! git diff --quiet "$remote_sha" "$local_sha" -- "${analyzer_paths[@]}" 2>/dev/null; then
+    analyzer_touched=true
+  fi
+done <<<"$REF_LINES"
+
+if [[ "$pushing" != "true" ]]; then
+  exit 0
+fi
+
+if [[ "$is_main" == "true" || "$analyzer_touched" == "true" || "$no_base" == "true" ]]; then
+  if [[ "$is_main" == "true" ]]; then
+    echo "Info: push targets main — running the full suite (~140s)..."
+  elif [[ "$analyzer_touched" == "true" ]]; then
+    echo "Info: analyzer paths changed (src/, vendor/, test/corpus/) — running the full suite (~140s)..."
+  else
+    echo "Info: new remote branch (no base to diff) — running the full suite (~140s)..."
+  fi
+  gate_cmd=(npm test)
+  gate_label="tests"
+else
+  echo "Info: running fast checks (~12s; analyzer untouched)..."
+  echo "      Full suite: npm test"
+  gate_cmd=(npm run test:fast)
+  gate_label="fast checks"
+fi
+
+if ! "${gate_cmd[@]}"; then
+  echo ""
+  echo "Error: BLOCKED: $gate_label failed; fix before pushing."
+  echo "   Override (emergency only): SKIP_PREPUSH_TESTS=1 git push"
+  exit 1
+fi
+echo "OK: $gate_label passed."

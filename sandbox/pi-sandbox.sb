@@ -1,0 +1,184 @@
+;; pi-sandbox.sb — macOS Seatbelt (SBPL) profile for wrapping the Pi coding agent.
+;;
+;; Defense-in-depth OS layer UNDER the pi-sandbox-guard extension: even if the guard
+;; is bypassed (dynamic exec, mutated event.input, an analyzer gap, a bug), the
+;; kernel still confines WRITES to a small boundary and denies reads of host
+;; credential files.
+;;
+;; Policy shape: allow-by-default, then deny all writes and
+;; re-allow only the boundary, then deny reads of HOME credential locations.
+;; We intentionally do NOT confine reads-in-general, network, or process exec —
+;; that keeps a Node TUI + local model + web_search working without death-by-EPERM.
+;; Filesystem WRITE containment is the high-value layer.
+;;
+;; Params (supplied via sandbox-exec -D):
+;;   PROJECT       canonical project root (git toplevel or explicit PI_PROJECT)
+;;   HOME          user home
+;;   TMPDIR        canonical per-user temp dir
+;;   ACTIVE_HOOKS  absolute path of the effective active git hooks directory
+;;                 (resolved core.hooksPath, or PROJECT/.git/hooks by default;
+;;                 also the shared hooks dir for linked worktrees). The launcher
+;;                 supplies this; the profile denies the whole subtree.
+;;
+;; Reviewed decisions:
+;;  - secret-read denies are scoped to specific HOME locations ONLY, never blanket
+;;    extension regexes, so project files (cert fixtures, test keys, k8s/terraform
+;;    fixtures, *.pem under the repo) stay READABLE. (.env is the one project-wide deny.)
+;;  - ~/.npm + ~/.cache are writable so npm/pip/uv/playwright work; the launcher sets
+;;    NPM_CONFIG_USERCONFIG=/dev/null so npm never needs to read ~/.npmrc.
+;;  - ~/.pi/agent/extensions is NOT writable -> the sandboxed process cannot disable
+;;    the deployed guard. Only ~/.pi/agent/sessions is writable (session persistence).
+
+(version 1)
+(allow default)
+
+;; ---------------------------------------------------------------------------
+;; WRITES: deny everything, then re-allow only the boundary.
+;; ---------------------------------------------------------------------------
+(deny file-write*)
+(allow file-write*
+  (subpath (param "PROJECT"))                                   ; the project/repo (Pi may edit it)
+  (subpath (param "TMPDIR"))                                    ; canonical per-user temp
+  (subpath "/private/tmp")                                      ; /tmp -> /private/tmp
+  (subpath (string-append (param "HOME") "/.pi/agent"))         ; Pi runtime: sessions, locks,
+                                                                ; run-history, trust.json (see deny below)
+  (subpath (string-append (param "HOME") "/.npm"))              ; npm cache
+  (subpath (string-append (param "HOME") "/.cache"))            ; generic tool cache (pip/uv/etc.)
+  (subpath (string-append (param "HOME") "/Library/Caches"))    ; macOS tool caches (pip/uv/playwright)
+  (literal "/dev/null")
+  (literal "/dev/tty")
+  (literal "/dev/stdout")
+  (literal "/dev/stderr")
+  (literal "/dev/fd/1")
+  (literal "/dev/fd/2")
+  (regex #"^/dev/ttys[0-9]+$"))                                 ; pty slaves for the TUI
+
+;; Re-protect the sensitive parts of ~/.pi/agent: the sandboxed process may write
+;; its operational state (sessions/locks/history) but must NOT tamper with config,
+;; auth, or the deployed extensions (which would let it DISABLE the guard).
+;; SBPL last-match-wins: these denies override the ~/.pi/agent allow above.
+(deny file-write*
+  ;; Git-hook persistence / escape: the whole PROJECT tree is a writable root
+  ;; (above), so without these denies the sandboxed agent could plant a git hook
+  ;; (pre-commit, post-checkout, …) that later executes OUTSIDE the sandbox on
+  ;; the next unsandboxed `git` — a vector Anthropic's sandbox-runtime and
+  ;; OpenAI Codex both hardcode against.
+  ;;
+  ;; Coverage (metacharacter-safe subpath / require-all; no PROJECT-interpolated
+  ;; regex that would misbehave on paths containing `[`, `+`, `(`, …):
+  ;;   1. PROJECT/.git/hooks — default hooks directory (every hook name: known,
+  ;;      obscure p4-*/post-index-change, or future — not a name allow-list).
+  ;;   2. ACTIVE_HOOKS — the effective active hooks directory resolved by the
+  ;;      launcher (core.hooksPath e.g. PROJECT/.githooks, linked-worktree
+  ;;      shared hooks, or an absolute out-of-project hooksPath that would
+  ;;      otherwise sit under a writable root like /private/tmp).
+  ;;   3. PROJECT/.git/modules/**/hooks — submodule metadata hooks. Scoped with
+  ;;      require-all: (subpath PROJECT/.git/modules) AND a path-component regex
+  ;;      for /hooks. The regex alone would be an unscoped write hole; AND with
+  ;;      the project-scoped subpath keeps it contained.
+  ;; Order: deny-subtrees here, allow-back only the git-init minimum after this
+  ;; block (dir nodes + inert *.sample).
+  (subpath (string-append (param "PROJECT") "/.git/hooks"))
+  (subpath (param "ACTIVE_HOOKS"))
+  (require-all
+    (subpath (string-append (param "PROJECT") "/.git/modules"))
+    (regex #"/hooks(/|$)"))
+  (subpath (string-append (param "HOME") "/.pi/agent/extensions"))
+  (literal (string-append (param "HOME") "/.pi/agent/settings.json"))
+  (literal (string-append (param "HOME") "/.pi/agent/auth.json"))
+  (literal (string-append (param "HOME") "/.pi/agent/trust.json"))
+  ;; System-prompt files under ~/.pi/agent (installed for --append-system-prompt).
+  ;; An agent that can rewrite its own appended system prompt has a persistent
+  ;; steering-injection vector that survives into the next session, so any
+  ;; *prompt*.md there is write-denied — not just a fixed pair of filenames.
+  ;;
+  ;; Scoped with require-all: the subpath confines the match to ~/.pi/agent while
+  ;; the regex selects the filename. A BARE suffix regex here would be unanchored
+  ;; and match ANY path on the host — verified to deny an unrelated
+  ;; PROJECT/docs/prompt-guide.md, since this deny comes after the PROJECT allow
+  ;; and last-match-wins.
+  ;;
+  ;; `.*` (not `[^/]*`) after the agent dir so nested layouts are covered too:
+  ;; a `[^/]*` form matched only DIRECT children, leaving
+  ;; ~/.pi/agent/prompts/custom-prompt.md agent-writable. Both depths are pinned
+  ;; by probes in scripts/test-sandbox-profile.sh.
+  (require-all
+    (subpath (string-append (param "HOME") "/.pi/agent"))
+    (regex #"/\.pi/agent/.*prompt[^/]*\.md$"))
+  ;; These credential/config dirs may be reachable through a malicious project
+  ;; symlink if the project boundary is writable. Deny them after the PROJECT
+  ;; allow so last-match-wins keeps them protected.
+  (subpath (string-append (param "HOME") "/.ssh"))
+  (subpath (string-append (param "HOME") "/.aws"))
+  (subpath (string-append (param "HOME") "/.docker"))
+  (subpath (string-append (param "HOME") "/.gnupg"))
+  (subpath (string-append (param "HOME") "/.kube"))
+  (subpath (string-append (param "HOME") "/.config/gh"))
+  (subpath (string-append (param "HOME") "/.config/gcloud"))
+  (literal (string-append (param "HOME") "/.git-credentials"))
+  (literal (string-append (param "HOME") "/.config/git/credentials"))
+  ;; Write-deny symmetry with the read-deny list below: a poisoned ~/.netrc or
+  ;; ~/.npmrc is a credential-exfil vector on the next unsandboxed run.
+  (literal (string-append (param "HOME") "/.netrc"))
+  (literal (string-append (param "HOME") "/.npmrc"))
+  (subpath (string-append (param "HOME") "/.secrets")))
+
+;; Re-allow the minimum `git init` / submodule-init needs inside the now-denied
+;; hooks subtrees (last-match-wins, so this overrides the subtree denies above
+;; but not for the active hook files it does NOT re-allow):
+;;   - the default hooks DIRECTORY NODE itself, so `git init` can create it;
+;;   - inert *.sample files under PROJECT/.git/hooks (git NEVER executes these);
+;;   - submodule hooks DIRECTORY NODES (…/.git/modules/**/hooks) so submodule
+;;     init can create them;
+;;   - inert *.sample under those submodule hooks dirs.
+;; Each *.sample re-allow uses require-all to AND two conditions:
+;;   (a) a metacharacter-safe (subpath …) scoped to THIS project (or modules
+;;       tree), and
+;;   (b) a suffix regex matching only *.sample (or the bare /hooks dir node).
+;; Without (a) a bare suffix regex is unanchored and would punch a hole in
+;; write-containment for `*.sample` (or anything matching /hooks) in ANY path
+;; on the host. With require-all, out-of-project writes stay
+;; denied. ACTIVE_HOOKS is NOT re-allowed for samples when it points elsewhere
+;; (e.g. .githooks): only the git-init default/modules scaffolding is intended.
+;; An ACTIVE hook (pre-commit, post-checkout, p4-*, post-index-change, any name)
+;; lacks the .sample suffix, so it stays denied in the default, launch-time
+;; ACTIVE_HOOKS, and submodule hook trees. Routine `.git/config` writes remain
+;; allowed, so a mid-session core.hooksPath pivot to a different project path is
+;; a documented residual risk; review changes before the next unsandboxed git.
+(allow file-write*
+  (literal (string-append (param "PROJECT") "/.git/hooks"))
+  (require-all
+    (subpath (string-append (param "PROJECT") "/.git/hooks"))
+    (regex #"/\.git/hooks/[^/]*\.sample$"))
+  (require-all
+    (subpath (string-append (param "PROJECT") "/.git/modules"))
+    (regex #"/hooks$"))
+  (require-all
+    (subpath (string-append (param "PROJECT") "/.git/modules"))
+    (regex #"/hooks/[^/]*\.sample$")))
+
+;; ---------------------------------------------------------------------------
+;; SECRET READS: deny reading host credential material. Scoped to specific HOME
+;; locations so project files are unaffected. (No blanket *.key/*.pem regexes —
+;; those would break legit repos.)
+;; ---------------------------------------------------------------------------
+(deny file-read*
+  (subpath (string-append (param "HOME") "/.ssh"))
+  (literal (string-append (param "HOME") "/.aws/credentials"))
+  (literal (string-append (param "HOME") "/.aws/config"))
+  (literal (string-append (param "HOME") "/.docker/config.json"))
+  (literal (string-append (param "HOME") "/.kube/config"))
+  (subpath (string-append (param "HOME") "/.gnupg"))
+  (subpath (string-append (param "HOME") "/.config/gh"))
+  (literal (string-append (param "HOME") "/.netrc"))
+  (literal (string-append (param "HOME") "/.git-credentials"))
+  (literal (string-append (param "HOME") "/.config/git/credentials"))
+  (literal (string-append (param "HOME") "/.npmrc"))
+  (subpath (string-append (param "HOME") "/.secrets"))
+  (subpath (string-append (param "HOME") "/.config/gcloud"))
+  ;; The analyzer's security event log records the FULL TEXT of every flagged
+  ;; command (which may embed secrets). Appending still works (write is separate
+  ;; from read in SBPL); the sandboxed process just cannot read the history back.
+  (literal (string-append (param "HOME") "/.pi/agent/security-events.log"))
+  ;; .env files anywhere (incl. project) — the one project-wide secret deny.
+  (regex #"/\.env($|\.)"))

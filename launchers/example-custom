@@ -1,0 +1,75 @@
+#!/bin/zsh -f
+set -euo pipefail
+
+# example-custom — TEMPLATE for a custom sandboxed Pi wrapper.
+#
+# Copy this to your own directory (NOT into this repo — see below), edit the exec
+# line at the bottom, then install it alongside the protected shim:
+#
+#   scripts/deploy-launchers.sh --extra-launchers ~/my-pi-launchers
+#
+# Keep your wrappers OUTSIDE this repo so `git pull` never conflicts with them and
+# an unreviewed file can never be picked up from the working tree.
+#
+# ── The security contract (enforced by scripts/check-launchers.mjs) ────────────
+# Deployment is fail-closed: if a wrapper breaks any of these rules, the whole
+# deploy is refused and nothing is installed. Each rule closes a real bypass:
+#
+#   1. `#!/bin/zsh -f`      — no user rc files, so a hostile ~/.zshenv cannot
+#                             redefine anything before the sandbox applies.
+#   2. Exec the SIBLING shim via `${0:A:h}/pi`, never `pi` or an absolute path to
+#      the real Pi binary. The sibling form resolves next to this wrapper, so
+#      ambient PATH ordering cannot redirect it. Exec'ing the real binary would
+#      run Pi with NO Seatbelt boundary at all.
+#   3. Call a permitted non-trampolining pre-sandbox helper by absolute trusted
+#      path (pin it in a *_BIN variable, as with CURL_BIN below). The permitted
+#      set is curl, wget, jq, grep, sed, lsof, stat, shasum, test, true, and false.
+#      Shells/interpreters/task runners are refused even from a trusted path.
+#   4. If you set PATH, list only trusted root-owned prefixes. `/tmp:/usr/bin` is
+#      all-absolute yet still lets an agent-writable `/tmp/curl` run first.
+#   5. Keep one statement per line and use only simple assignments, `[ ... ]`
+#      conditionals, trusted `*_BIN` helper calls, `print`, `exit`, and the final
+#      protected-shim `exec`. Arbitrary shell evaluation/control flow is rejected
+#      because the deploy check intentionally does not pretend to parse all zsh.
+#
+# Everything below the marker is yours to change; the rules above are not.
+
+# ── Optional preflight: check a local model server is up before launching ──────
+# Delete this block if your wrapper does not need it. Note the pinned absolute
+# path (rule 3) — this is the pattern to copy for any helper tool.
+#
+# Anything here runs BEFORE Seatbelt applies, so it gets the full ambient
+# environment. Pass `-q` as curl's FIRST argument: without it curl reads
+# $CURL_HOME/.curlrc, $XDG_CONFIG_HOME/curlrc, and ~/.curlrc, and curl 8.3+ can
+# import an environment variable and expand it into a header or URL — so an
+# agent-planted curlrc turns this pre-sandbox probe into an exfiltration deputy.
+# Verified on curl 8.7.1: a planted curlrc is honored without `-q` and ignored
+# with it. The lint cannot enforce this, so copy it deliberately.
+CURL_BIN="/usr/bin/curl"
+MODEL_ENDPOINT="http://127.0.0.1:1337/v1/models"
+
+if [ ! -x "$CURL_BIN" ]; then
+  print -u2 "Required curl not found at $CURL_BIN."
+  exit 1
+fi
+
+if ! "$CURL_BIN" -q -fsS --max-time 2 "$MODEL_ENDPOINT" >/dev/null 2>&1; then
+  print -u2 "Model server is not reachable at $MODEL_ENDPOINT."
+  print -u2 "Start it, then run this launcher again."
+  exit 1
+fi
+
+# ── Hand off to the protected shim (rule 2) ───────────────────────────────────
+# ${0:A:h} is this script's own resolved directory, so `pi` here is always the
+# Seatbelt shim installed next to it.
+PI_SHIM="${0:A:h}/pi"
+if [ ! -x "$PI_SHIM" ]; then
+  print -u2 "Protected pi shim not found at $PI_SHIM."
+  print -u2 "Install it first: npm run deploy:launchers"
+  exit 1
+fi
+
+# ── EDIT BELOW: your Pi flags ─────────────────────────────────────────────────
+# Any Pi arguments work here (--provider, --model, --tools, --append-system-prompt,
+# …). "$@" must stay last so callers can pass their own flags through.
+exec "$PI_SHIM" "$@"
