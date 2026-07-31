@@ -2,7 +2,7 @@
 //
 // Harness-agnostic core for pi-sandbox-guard.
 //
-// Responsibility: given a candidate bash command string, run the vendored,
+// Responsibility: given a candidate bash command string, run the in-tree,
 // adversarially-hardened `validate-bash-command.sh` analyzer in a locked-down
 // subprocess and return a normalized decision. This module knows NOTHING about
 // Pi or Claude Code — adapters map its Decision onto their host contract.
@@ -27,8 +27,8 @@ import { dirname, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
-/** Absolute path to the vendored analyzer snapshot. */
-export const VENDORED_SCRIPT = join(__dirname, '..', 'vendor', 'validate-bash-command.sh');
+/** Absolute path to the in-tree analyzer script, a sibling of this module. */
+export const ANALYZER_SCRIPT = join(__dirname, 'validate-bash-command.sh');
 
 /**
  * Fixed, trusted PATH for the analyzer subprocess. A repo-local `./bin/jq` or
@@ -119,7 +119,7 @@ export const DISARM_POLICY_KEYS = Object.freeze([
 const DEFAULTS = Object.freeze({
   timeoutMs: 2000,
   killGraceMs: 200,
-  // Defensive cap that MUST stay in lockstep with the vendored analyzer's own
+  // Defensive cap that MUST stay in lockstep with the analyzer's own
   // internal cap (currently 32768 bytes). Above 32 KB the analyzer takes cheap
   // shortcuts that can still return 'allow' for large benign-looking text, so
   // we pre-reject here to guarantee consistent semantics. When the analyzer cap
@@ -166,7 +166,7 @@ function buildEnv(trustedPolicyEnv = {}, home = process.env.HOME || '') {
       if (ALLOWED_POLICY_KEY_SET.has(k) && typeof v === 'string') env[k] = v;
     }
   }
-  // Map our POLICY_* names onto the names the vendored script reads today, so
+  // Map our POLICY_* names onto the names the analyzer script reads today, so
   // the adapter can speak POLICY_* without us forking the script yet. Callers
   // cannot inject CLAUDE_RM_SAFE_ROOTS directly (not in ALLOWED_POLICY_KEYS).
   if (env.POLICY_RM_SAFE_ROOTS) {
@@ -220,7 +220,7 @@ const PREFLIGHT_PROBE_TIMEOUT_MS = 10_000;
 
 /**
  * Preflight: is the guard runnable at all?
- * Checks the vendored script exists and every required helper EXECUTES a no-op
+ * Checks the analyzer script exists and every required helper EXECUTES a no-op
  * successfully on the SAFE_PATH (not the ambient PATH). Returns a structured
  * result; callers decide how to fail (a destructive-command guard should fail
  * CLOSED — block).
@@ -238,7 +238,7 @@ export async function preflight(testOverrides = {}) {
   const probePath = testOverrides.path ?? SAFE_PATH;
   const probeNodeBin = testOverrides.nodeBin ?? GUARD_NODE;
   const platform = process.platform;
-  const scriptPresent = existsSync(VENDORED_SCRIPT);
+  const scriptPresent = existsSync(ANALYZER_SCRIPT);
 
   if (platform === 'win32') {
     // No bash/awk by default; do not attempt fragile WSL spawning.
@@ -306,9 +306,9 @@ export async function preflight(testOverrides = {}) {
 // ANSI-C quote normalization probe (reveal-only)
 // ---------------------------------------------------------------------------
 //
-// The vendored analyzer does not normalize ANSI-C quoted command words, so
+// The analyzer does not normalize ANSI-C quoted command words, so
 // `$'rm' -rf /` and `$'r'$'m' -rf /` are documented fail-opens (see
-// KNOWN_ANALYZER_GAPS.md). We mitigate at the guard level WITHOUT rewriting the
+// docs/ARCHITECTURE.md). We mitigate at the guard level WITHOUT rewriting the
 // analyzer's input: the ORIGINAL command is always analyzed as-is, and when the
 // command contains ANSI-C spans we ALSO analyze a decoded probe string, taking
 // the WORST of the two verdicts. A decoder bug can therefore only produce a
@@ -409,7 +409,7 @@ function decodeAnsiCSpan(s, start) {
 }
 
 /** Depth beyond which the probe stops descending into nested substitutions.
- * The vendored analyzer already caps command-substitution depth (ask/block on
+ * The analyzer already caps command-substitution depth (ask/block on
  * deep nesting), so the ORIGINAL-command verdict covers pathological nesting;
  * this guard just bounds probe recursion so a `$(` flood can't overflow. */
 const ANSI_PROBE_MAX_DEPTH = 40;
@@ -428,7 +428,7 @@ function singleQuote(s) {
 
 /**
  * Remove backslash-newline line continuations, which bash elides BEFORE
- * tokenization — so `r\<newline>m -rf /` runs as `rm -rf /`. The vendored
+ * tokenization — so `r\<newline>m -rf /` runs as `rm -rf /`. The analyzer
  * analyzer does not preprocess these, so it misses the reassembled command
  * (independent of ANSI-C: plain `r\<newline>m` slips past too). Used to build a
  * reveal-only probe variant. Unconditional in bash (context-free), so this is
@@ -757,7 +757,7 @@ async function analyzeCommandRaw(command, opts = {}) {
     );
   }
   const cwd = opts.cwd;
-  if (!existsSync(VENDORED_SCRIPT)) {
+  if (!existsSync(ANALYZER_SCRIPT)) {
     return failClosed('Guard analyzer missing — denied as fail-safe.', {
       exitCode: null,
       signal: null,
@@ -765,7 +765,7 @@ async function analyzeCommandRaw(command, opts = {}) {
     });
   }
 
-  // Build the stdin envelope the vendored script expects: {tool_input:{command}}.
+  // Build the stdin envelope the analyzer script expects: {tool_input:{command}}.
   // We construct it in Node (no jq on the adapter side) and pipe it in. The
   // command never appears as an argv token — only on stdin.
   const envelope = JSON.stringify({ tool_input: { command } });
@@ -786,7 +786,7 @@ async function analyzeCommandRaw(command, opts = {}) {
     // so we catch and fail closed.
     let child;
     try {
-      child = spawn('/bin/bash', [VENDORED_SCRIPT], {
+      child = spawn('/bin/bash', [ANALYZER_SCRIPT], {
         cwd,
         env,
         stdio: ['pipe', 'pipe', 'pipe'],

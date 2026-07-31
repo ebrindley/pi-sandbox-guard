@@ -1,6 +1,7 @@
 {
   "name": "@ebrindley/pi-sandbox-guard",
   "version": "0.1.0",
+  "private": true,
   "description": "Fail-closed macOS Seatbelt sandbox for the Pi coding agent: writes and deletes outside your project are denied at the kernel, bar an explicit allow-list (temp dirs, tool caches). Plus a pre-execution bash-command filter. Requires a deploy step; npm install alone does not activate it.",
   "author": "Ed Brindley",
   "type": "module",
@@ -18,17 +19,14 @@
   "files": [
     "src/",
     "test/",
-    "vendor/validate-bash-command.sh",
-    "vendor/README.md",
     "sandbox/",
     "config/",
     "launchers/",
     "scripts/",
-    "docs/SANDBOX.md",
+    "docs/ARCHITECTURE.md",
     "docs/SETUP.md",
     "README.md",
-    "SECURITY.md",
-    "KNOWN_ANALYZER_GAPS.md"
+    "SECURITY.md"
   ],
   "scripts": {
     "setup:hooks": "bash scripts/setup-hooks.sh",
@@ -67,9 +65,6 @@
   "os": [
     "darwin"
   ],
-  "publishConfig": {
-    "access": "public"
-  },
   "repository": {
     "type": "git",
     "url": "git+https://github.com/ebrindley/pi-sandbox-guard.git"

@@ -1,5 +1,5 @@
 {
-  "$schema-note": "Golden characterization corpus for the guard's decision contract, exercised through analyzeCommand() (the in-tree analyzer + guard-level hardening such as the ANSI-C reveal-only probe). Fields: command (string), cwd ('{TMP}' scratch temp dir | '{REPO}' scratch git repo; default {TMP}), expect ('allow'|'ask'|'block') or expectNot, note. For KNOWN analyzer gaps set expectFail:true AND actual:'<current real verdict>' — the runner passes only while the live verdict EQUALS actual, and FAILS the moment it changes in either direction (gap fixed to `expect`, or drifted to a third verdict), forcing this corpus and KNOWN_ANALYZER_GAPS.md to be updated together. Commands may reference {REPO} inside the command string; it resolves to the scratch repo's absolute path. expectOn ({\"<process.platform>\": \"allow|ask|block\"}) overrides expect on that platform, for verdicts that are genuinely OS-dependent (e.g. the /Users/* blanket rule has no /home/* Linux equivalent).",
+  "$schema-note": "Golden characterization corpus for the guard's decision contract, exercised through analyzeCommand() (the in-tree analyzer + guard-level hardening such as the ANSI-C reveal-only probe). Fields: command (string), cwd ('{TMP}' scratch temp dir | '{REPO}' scratch git repo; default {TMP}), expect ('allow'|'ask'|'block') or expectNot, note. For KNOWN analyzer gaps set expectFail:true AND actual:'<current real verdict>' — the runner passes only while the live verdict EQUALS actual, and FAILS the moment it changes in either direction (gap fixed to `expect`, or drifted to a third verdict), forcing this corpus and docs/ARCHITECTURE.md to be updated together. Commands may reference {REPO} inside the command string; it resolves to the scratch repo's absolute path. expectOn ({\"<process.platform>\": \"allow|ask|block\"}) overrides expect on that platform, for verdicts that are genuinely OS-dependent (e.g. the /Users/* blanket rule has no /home/* Linux equivalent).",
   "cases": [
     { "command": "ls -la", "expect": "allow", "note": "benign baseline" },
     { "command": "git status", "expect": "allow" },
@@ -297,7 +297,7 @@
     { "command": "{ cd /etc; printf x; } & truncate hosts", "expect": "allow", "note": "background group reset uses the enclosing cwd rather than the group cwd" },
     { "command": "find . -name \"*.c\" -print", "expect": "allow", "note": "benign find without -exec/-delete" },
     { "command": "find . -exec echo {} \\;", "expect": "allow", "note": "find -exec with non-destructive verb stays allow" },
-    { "command": "eval \"$PAYLOAD\"", "expect": "allow", "note": "CHARACTERIZATION of a designed limitation: fully dynamic exec is out of scope for static analysis (see KNOWN_ANALYZER_GAPS.md #3); recorded so any future eval heuristic surfaces as a corpus diff, and backstopped by the OS sandbox layer." },
+    { "command": "eval \"$PAYLOAD\"", "expect": "allow", "note": "CHARACTERIZATION of a designed limitation: fully dynamic exec is out of scope for static analysis (see docs/ARCHITECTURE.md #3); recorded so any future eval heuristic surfaces as a corpus diff, and backstopped by the OS sandbox layer." },
     { "command": "xargs rm", "expect": "ask", "note": "analyzer has an explicit xargs-rm warn rule -> confirm tier" },
 
     { "command": "python3 -c \"print(1)\"", "expect": "allow", "note": "benign interpreter one-liner: print" },
@@ -373,7 +373,7 @@
     { "command": "node -e 'require(\"fs\").rmSync(\"./out\",{recursive:true})'", "expect": "ask", "note": "node rmSync on non-protected path -> confirm" },
     { "command": "python3 -c 'print(\"/etc\")'; node -e 'require(\"fs\").rm(\"./out\",()=>{})'", "expect": "ask", "note": "separate payloads do not combine a protected path with a relative delete" },
 
-    { "command": "python3 -c \"$CODE\"", "expect": "allow", "note": "CHARACTERIZATION of remaining dynamic gap: payload is a shell variable — no literal code to scan (see KNOWN_ANALYZER_GAPS.md #5)" },
+    { "command": "python3 -c \"$CODE\"", "expect": "allow", "note": "CHARACTERIZATION of remaining dynamic gap: payload is a shell variable — no literal code to scan (see docs/ARCHITECTURE.md #5)" },
     { "command": "node -e \"$(cat payload.js)\"", "expect": "allow", "note": "CHARACTERIZATION of remaining dynamic gap: payload from command substitution is not a static literal" },
     { "command": "git config core.hooksPath /tmp/evil", "expect": "ask", "note": "git-hook persistence: relocates the active hook tree, which Seatbelt write-denies only as resolved at STARTUP (ACTIVE_HOOKS) — a mid-session repoint escapes that deny" },
     { "command": "git -c core.hooksPath=/tmp/evil status", "expect": "ask", "note": "per-invocation hooksPath repoint still runs the relocated hook for that command" },

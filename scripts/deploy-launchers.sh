@@ -179,7 +179,7 @@ write_provenance() {
       echo "hash_launcher_${LAUNCHER_NAMES[$prov_i]}=$(ops_hash_file "${LAUNCHER_SRCS[$prov_i]}")"
       prov_i=$((prov_i + 1))
     done
-    echo "vendor_provenance=local-file-integrity-only; upstream not attested"
+    echo "analyzer_provenance=local-file-integrity-only; upstream not attested"
   } > "$out"
 }
 

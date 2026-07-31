@@ -2,7 +2,7 @@
 
 # SPDX-License-Identifier: MIT
 # Bash-command analyzer for pi-sandbox-guard. Owned and maintained in this
-# repository (see vendor/README.md); adapted from an earlier MIT-licensed
+# repository (see docs/SETUP.md); adapted from an earlier MIT-licensed
 # analyzer by the same author and MIT-licensed here.
 #
 # validate-bash-command.sh v3.16
@@ -31,7 +31,7 @@
 #   - ASK for dangerous APIs / command-execution / ambiguous dynamic shapes
 #   - ALLOW for benign print/JSON/math/version one-liners
 # Fully dynamic payloads (python -c "$VAR", runtime-assembled code) remain out
-# of scope; see KNOWN_ANALYZER_GAPS.md.
+# of scope; see docs/ARCHITECTURE.md.
 #
 # v3.14: fix rm flag parsing. segment_has_rf_flags() used a loose regex
 # ("-[a-zA-Z]*[rRfF]") that matched ANY option carrying r/R/f/F, so a plain
@@ -4051,7 +4051,7 @@ fi
 # filesystem / process intent. This is a static string classifier — it does not
 # execute the payload and does not resolve runtime-assembled code
 # (python3 -c "$VAR", node -e "$(cat f)", etc.). Those remain the dynamic class
-# tracked under KNOWN_ANALYZER_GAPS.
+# tracked under docs/ARCHITECTURE.md (known analyzer gaps).
 #
 # Verdict contract for this section:
 #   BLOCK (2) — dangerous API + clear protected root/device target, or shell

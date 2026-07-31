@@ -1,8 +1,9 @@
 // degraded.mjs — proves the adapter BLOCKS ALL bash when the guard is unhealthy.
 //
 // We can't change process.platform in-process, so we force preflight to report
-// the analyzer missing: copy src/ into a temp dir WITHOUT vendor/, import that
-// isolated copy, and assert that even a benign command is blocked.
+// the analyzer missing: copy only the JS modules of src/ into a temp dir, leaving
+// out the analyzer script, import that isolated copy, and assert that even a
+// benign command is blocked.
 //
 // Run: node test/degraded.mjs
 
@@ -33,15 +34,19 @@ async function check(name, fn) {
 }
 
 async function main() {
-  // Build an isolated copy: <tmp>/src/{index,guard-core,pi-types.d}.mjs but NO
-  // <tmp>/vendor/, so guard-core's VENDORED_SCRIPT path does not exist ->
-  // preflight scriptPresent=false -> health.ok=false -> degraded block-all.
+  // Build an isolated copy: <tmp>/src/{index,guard-core}.mjs but NOT the sibling
+  // validate-bash-command.sh, so guard-core's ANALYZER_SCRIPT path does not exist
+  // -> preflight scriptPresent=false -> health.ok=false -> degraded block-all.
   const root = mkdtempSync(join(tmpdir(), 'pi-sandbox-guard-degraded-'));
   mkdirSync(join(root, 'src'));
   for (const f of ['index.mjs', 'guard-core.mjs']) {
     copyFileSync(join(srcDir, f), join(root, 'src', f));
   }
-  assert.equal(existsSync(join(root, 'vendor')), false, 'temp must NOT have vendor/');
+  assert.equal(
+    existsSync(join(root, 'src', 'validate-bash-command.sh')),
+    false,
+    'temp must NOT have the analyzer script',
+  );
 
   const mod = await import(pathToFileURL(join(root, 'src', 'index.mjs')).href);
   const calls = [];

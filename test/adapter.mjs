@@ -170,7 +170,7 @@ async function main() {
   });
 
   // FIX 1 degraded block-all is exercised for real in test/degraded.mjs (it
-  // imports an isolated copy of src/ without vendor/ so preflight reports the
+  // imports an isolated copy of src/ without the analyzer so preflight reports the
   // analyzer missing). Here we confirm malformed bash payloads fail closed.
   await check('malformed command payload -> block (fail-closed)', async () => {
     const r = await handler({ toolName: 'bash', input: {} }, {});
@@ -231,14 +231,13 @@ async function main() {
     const repoRoot = join(here, '..');
     const root = mkdtempSync(join(tmpdir(), 'pi-sandbox-guard-askfb-'));
     mkdirSync(join(root, 'src'));
-    mkdirSync(join(root, 'vendor'));
     copyFileSync(join(repoRoot, 'src', 'index.mjs'), join(root, 'src', 'index.mjs'));
     copyFileSync(join(repoRoot, 'src', 'guard-core.mjs'), join(root, 'src', 'guard-core.mjs'));
     copyFileSync(
-      join(repoRoot, 'vendor', 'validate-bash-command.sh'),
-      join(root, 'vendor', 'validate-bash-command.sh'),
+      join(repoRoot, 'src', 'validate-bash-command.sh'),
+      join(root, 'src', 'validate-bash-command.sh'),
     );
-    assert.ok(existsSync(join(root, 'vendor', 'validate-bash-command.sh')));
+    assert.ok(existsSync(join(root, 'src', 'validate-bash-command.sh')));
 
     const prev = process.env.POLICY_ASK_FALLBACK;
     process.env.POLICY_ASK_FALLBACK = 'allow';

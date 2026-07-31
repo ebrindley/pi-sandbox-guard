@@ -384,11 +384,9 @@ async function main() {
     // adding a production analyzer-path override to the public API.
     const root = mkdtempSync(join(tmpdir(), 'pi-guard-stdout-overflow-'));
     const srcDir = join(root, 'src');
-    const vendorDir = join(root, 'vendor');
     mkdirSync(srcDir);
-    mkdirSync(vendorDir);
     copyFileSync(new URL('../src/guard-core.mjs', import.meta.url), join(srcDir, 'guard-core.mjs'));
-    const fixtureAnalyzer = join(vendorDir, 'validate-bash-command.sh');
+    const fixtureAnalyzer = join(srcDir, 'validate-bash-command.sh');
     writeFileSync(
       fixtureAnalyzer,
       '#!/bin/bash\nprintf "stdout-overflow-fixture"\nsleep 5\n',

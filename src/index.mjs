@@ -106,7 +106,7 @@ export default function (pi) {
           h.platform === 'win32'
             ? 'unsupported platform (win32, no bash)'
             : !h.scriptPresent
-              ? 'vendored analyzer missing'
+              ? 'analyzer script missing'
               : `missing helpers: ${h.missing.join(', ')}`;
         // eslint-disable-next-line no-console
         console.error(
@@ -151,7 +151,7 @@ export default function (pi) {
         : health.platform === 'win32'
           ? 'unsupported platform (win32, no bash)'
           : !health.scriptPresent
-            ? 'vendored analyzer missing'
+            ? 'analyzer script missing'
             : `missing helpers: ${health.missing.join(', ')}`;
       return {
         block: true,

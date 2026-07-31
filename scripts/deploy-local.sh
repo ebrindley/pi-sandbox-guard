@@ -8,8 +8,8 @@
 # the deploy dir is a built artifact. Redeploy = re-run this script.
 #
 # Design (packaging review):
-#   - Preserve the repo's src/ + vendor/ layout so guard-core.mjs's relative
-#     `../vendor/...` path keeps resolving. (Flattening it would break the path.)
+#   - Preserve the repo's src/ layout so guard-core.mjs's sibling
+#     `validate-bash-command.sh` path keeps resolving. (Flattening it would break the path.)
 #   - index.ts is a one-line shim re-exporting ./src/index.mjs — Pi auto-discovers
 #     .ts only, but its jiti loader imports the sibling .mjs fine. No TS port (drift trap).
 #   - HARD-CHECK runtime deps (bash/jq/awk) on the guard's sanitized PATH;
@@ -82,8 +82,8 @@ fi
 # --- 0. Sanity: required source files exist ---
 SRC_CORE="$REPO_ROOT/src/guard-core.mjs"
 SRC_ADAPTER="$REPO_ROOT/src/index.mjs"
-SRC_VENDOR="$REPO_ROOT/vendor/validate-bash-command.sh"
-for f in "$SRC_CORE" "$SRC_ADAPTER" "$SRC_VENDOR"; do
+SRC_ANALYZER="$REPO_ROOT/src/validate-bash-command.sh"
+for f in "$SRC_CORE" "$SRC_ADAPTER" "$SRC_ANALYZER"; do
   [ -f "$f" ] || die "missing source file: $f"
 done
 
@@ -147,16 +147,16 @@ rollback() {
   exit "$status"
 }
 trap rollback EXIT
-mkdir -p "$STAGE/src" "$STAGE/vendor"
+mkdir -p "$STAGE/src"
 cp "$SRC_CORE" "$STAGE/src/guard-core.mjs"
 cp "$SRC_ADAPTER" "$STAGE/src/index.mjs"
-cp "$SRC_VENDOR" "$STAGE/vendor/validate-bash-command.sh"
-chmod +x "$STAGE/vendor/validate-bash-command.sh"
+cp "$SRC_ANALYZER" "$STAGE/src/validate-bash-command.sh"
+chmod +x "$STAGE/src/validate-bash-command.sh"
 
 # Fail loudly if the staged copy drifted from source (copy/FS glitch).
 ops_require_same_hash "guard-core.mjs" "$SRC_CORE" "$STAGE/src/guard-core.mjs"
 ops_require_same_hash "index.mjs" "$SRC_ADAPTER" "$STAGE/src/index.mjs"
-ops_require_same_hash "vendor/validate-bash-command.sh" "$SRC_VENDOR" "$STAGE/vendor/validate-bash-command.sh"
+ops_require_same_hash "src/validate-bash-command.sh" "$SRC_ANALYZER" "$STAGE/src/validate-bash-command.sh"
 
 # One-line .ts shim: Pi auto-discovers .ts; its loader imports the sibling .mjs.
 cat > "$STAGE/index.ts" <<'TS'
@@ -184,9 +184,9 @@ PI_VERSION="$(pi --version 2>/dev/null | head -1 || echo 'unknown')"
   echo "repo_root=$REPO_ROOT"
   echo "hash_index_mjs=$(ops_hash_file "$STAGE/src/index.mjs")"
   echo "hash_guard_core_mjs=$(ops_hash_file "$STAGE/src/guard-core.mjs")"
-  echo "hash_vendor_sh=$(ops_hash_file "$STAGE/vendor/validate-bash-command.sh")"
+  echo "hash_analyzer_sh=$(ops_hash_file "$STAGE/src/validate-bash-command.sh")"
   echo "hash_algo=sha256"
-  echo "vendor_provenance=local-file-integrity-only; upstream not attested"
+  echo "analyzer_provenance=local-file-integrity-only; upstream not attested"
 } > "$STAGE/.deployed-version"
 
 # --- 4. Verify the STAGED copy actually works (preflight on the artifact path) ---
@@ -248,12 +248,12 @@ if [ -e "$DEST" ]; then
 fi
 mv "$STAGE" "$DEST"
 STAGE_INSTALLED=1
-chmod +x "$DEST/vendor/validate-bash-command.sh" 2>/dev/null || true
+chmod +x "$DEST/src/validate-bash-command.sh" 2>/dev/null || true
 
 # Post-install integrity: installed hashes must still match source.
 ops_require_same_hash "installed guard-core.mjs" "$SRC_CORE" "$DEST/src/guard-core.mjs"
 ops_require_same_hash "installed index.mjs" "$SRC_ADAPTER" "$DEST/src/index.mjs"
-ops_require_same_hash "installed vendor" "$SRC_VENDOR" "$DEST/vendor/validate-bash-command.sh"
+ops_require_same_hash "installed analyzer" "$SRC_ANALYZER" "$DEST/src/validate-bash-command.sh"
 
 if [ -n "$STATE_FILE" ]; then
   {

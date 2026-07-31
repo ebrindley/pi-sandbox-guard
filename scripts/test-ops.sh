@@ -148,13 +148,13 @@ then
   node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' \
     "$WORKDIR/status.json" \
     || fail "status --json emitted invalid JSON"
-  # Tamper detection: corrupt installed vendor and expect status drift
-  printf 'TAMPER\n' >> "$GUARD_DEST/vendor/validate-bash-command.sh"
+  # Tamper detection: corrupt installed analyzer and expect status drift
+  printf 'TAMPER\n' >> "$GUARD_DEST/src/validate-bash-command.sh"
   if bash "$REPO_ROOT/scripts/status.sh" \
     --dest-guard "$GUARD_DEST" \
     --dest-launchers "$LAUNCHERS_DEST" >/dev/null 2>&1
   then
-    fail "status should detect tampered vendor hash"
+    fail "status should detect tampered analyzer hash"
   fi
   pass "deploy-all + status + tamper detection (temp only)"
 
@@ -246,13 +246,13 @@ elif command -v sandbox-exec >/dev/null 2>&1; then
   # Source/runtime hash for guard alone should match (stamp + file).
   rid_g="$(ops_stamp_get "$GUARD_DEST/.deployed-version" release_id)"
   [ -n "$rid_g" ] || fail "missing guard release_id after temp deploy"
-  hs="$(ops_hash_file "$REPO_ROOT/vendor/validate-bash-command.sh")"
-  hd="$(ops_hash_file "$GUARD_DEST/vendor/validate-bash-command.sh")"
-  [ "$hs" = "$hd" ] || fail "guard vendor hash mismatch after temp deploy"
-  printf 'TAMPER\n' >> "$GUARD_DEST/vendor/validate-bash-command.sh"
-  hs2="$(ops_hash_file "$REPO_ROOT/vendor/validate-bash-command.sh")"
-  hd2="$(ops_hash_file "$GUARD_DEST/vendor/validate-bash-command.sh")"
-  [ "$hs2" != "$hd2" ] || fail "tamper did not change runtime vendor hash"
+  hs="$(ops_hash_file "$REPO_ROOT/src/validate-bash-command.sh")"
+  hd="$(ops_hash_file "$GUARD_DEST/src/validate-bash-command.sh")"
+  [ "$hs" = "$hd" ] || fail "guard analyzer hash mismatch after temp deploy"
+  printf 'TAMPER\n' >> "$GUARD_DEST/src/validate-bash-command.sh"
+  hs2="$(ops_hash_file "$REPO_ROOT/src/validate-bash-command.sh")"
+  hd2="$(ops_hash_file "$GUARD_DEST/src/validate-bash-command.sh")"
+  [ "$hs2" != "$hd2" ] || fail "tamper did not change runtime analyzer hash"
   pass "guard temp deploy + tamper detection (launchers skipped: no live profile apply)"
 else
   say "[test-ops] sandbox-exec absent; skipping install path"

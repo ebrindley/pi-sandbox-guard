@@ -14,7 +14,7 @@
 // mismatch its recorded expectation.
 //   - still mismatching  -> reported as a known gap, does NOT fail the run
 //   - now MATCHING       -> fails the run as a fixed gap: update the
-//     corpus entry (drop expectFail) and KNOWN_ANALYZER_GAPS.md together, so
+//     corpus entry (drop expectFail) and docs/ARCHITECTURE.md together, so
 //     the docs can never silently go stale again.
 
 import assert from 'node:assert/strict';
@@ -93,7 +93,7 @@ async function main() {
     const cwd = resolvePlaceholders(c.cwd || '{TMP}');
     const v = await analyzeCommand(command, { cwd, timeoutMs: 5000, home: process.env.HOME });
 
-    // Platform-conditional expectation: some vendored-analyzer verdicts are
+    // Platform-conditional expectation: some analyzer verdicts are
     // genuinely OS-dependent (e.g. the /Users/* blanket catastrophic rule only
     // exists for macOS home layouts; /home has no equivalent). expectOn
     // overrides expect for the named process.platform.
@@ -106,7 +106,7 @@ async function main() {
       // fail whenever the live verdict differs from `actual` — in EITHER
       // direction — so any movement (gap fixed to the wanted verdict, OR the gap
       // shifting to some third verdict) forces the corpus and
-      // KNOWN_ANALYZER_GAPS.md to be updated. Matching `wanted` while also equal
+      // docs/ARCHITECTURE.md to be updated. Matching `wanted` while also equal
       // to `actual` would be a contradictory entry, caught by loadCorpus().
       if (typeof c.actual !== 'string') {
         fail++;
@@ -129,7 +129,7 @@ async function main() {
           `  FAIL [${v.decision.padEnd(5)}] ${c.command}\n` +
             `         documented gap ${verb}: pinned actual="${c.actual}", now "${v.decision}".\n` +
             `         Update this corpus entry (adjust/remove expectFail + actual)\n` +
-            `         and KNOWN_ANALYZER_GAPS.md in the same change.`,
+            `         and docs/ARCHITECTURE.md in the same change.`,
         );
       }
       continue;

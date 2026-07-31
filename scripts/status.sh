@@ -97,9 +97,9 @@ if [ "$GUARD_PRESENT" -eq 1 ]; then
   check_pair "index.mjs" \
     "$REPO_ROOT/src/index.mjs" \
     "$DEST_GUARD/src/index.mjs"
-  check_pair "vendor/validate-bash-command.sh" \
-    "$REPO_ROOT/vendor/validate-bash-command.sh" \
-    "$DEST_GUARD/vendor/validate-bash-command.sh"
+  check_pair "src/validate-bash-command.sh" \
+    "$REPO_ROOT/src/validate-bash-command.sh" \
+    "$DEST_GUARD/src/validate-bash-command.sh"
   # Stamped hashes must match installed files (detect partial/corrupt stamps).
   if [ -f "$GUARD_STAMP" ]; then
     stamped="$(ops_stamp_get "$GUARD_STAMP" hash_guard_core_mjs)"
@@ -108,10 +108,10 @@ if [ "$GUARD_PRESENT" -eq 1 ]; then
       report "drift" "guard-stamp-hash_guard_core_mjs" "stamp=$stamped file=$actual"
       DRIFT=1
     fi
-    stamped="$(ops_stamp_get "$GUARD_STAMP" hash_vendor_sh)"
-    actual="$(ops_hash_file "$DEST_GUARD/vendor/validate-bash-command.sh")"
+    stamped="$(ops_stamp_get "$GUARD_STAMP" hash_analyzer_sh)"
+    actual="$(ops_hash_file "$DEST_GUARD/src/validate-bash-command.sh")"
     if [ -n "$stamped" ] && [ "$stamped" != "$actual" ]; then
-      report "drift" "guard-stamp-hash_vendor_sh" "stamp=$stamped file=$actual"
+      report "drift" "guard-stamp-hash_analyzer_sh" "stamp=$stamped file=$actual"
       DRIFT=1
     fi
   else
@@ -189,7 +189,7 @@ if [ "$LAUNCHERS_PRESENT" -eq 1 ]; then
     # (check-launchers.mjs) makes PI_SHIM="${0:A:h}/pi" mandatory, so grepping for
     # that marker matches only well-formed wrappers and MISSES precisely the
     # shim-bypassing file worth catching. Detecting those needs an allowlist of
-    # expected PATH contents, which is a different feature; see docs/SANDBOX.md on
+    # expected PATH contents, which is a different feature; see docs/ARCHITECTURE.md on
     # PATH ordering as the boundary.
     seen_names="$(ops_stamp_get "$LAUNCHERS_STAMP" launcher_names_seen)"
     if [ -n "$seen_names" ]; then
