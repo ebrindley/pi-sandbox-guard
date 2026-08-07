@@ -1,6 +1,6 @@
 #!/usr/bin/env bash
 #
-# bind-executable.sh — record which Pi install the protected shim should launch.
+# bind-executable.sh — record the Pi and OMP installs the shared shim should launch.
 #
 # WHY THIS EXISTS
 # The shim resolves the real Pi from a fixed list of trusted path prefixes. That list
@@ -23,9 +23,11 @@
 # npm script cannot retarget the launch), and a confined Pi session cannot repoint its
 # own next launch, because the config is not sandbox-writable.
 #
+# Pi is required by setup; OMP is optional.
+#
 # Usage:
 #   bind-executable.sh --detect            propose an install, confirm, then record
-#   bind-executable.sh --pi <abs-path> [--node <abs-path>]
+#   bind-executable.sh --pi <abs-path> [--omp <abs-path>] [--node <abs-path>]
 #   bind-executable.sh --show              print the current binding
 #   bind-executable.sh --check             verify the binding still resolves (exit 3 if not)
 #   bind-executable.sh --detect --yes      non-interactive (CI/scripted setup)
@@ -37,9 +39,11 @@ set -euo pipefail
 CONFIG_DIR="${PI_SANDBOX_CONFIG_DIR:-$HOME/.config/pi-sandbox-guard}"
 CONFIG="$CONFIG_DIR/executables.conf"
 SHIM="${PI_SANDBOX_SHIM:-$HOME/.local/bin/pi}"
+OMP_SHIM="${OMP_SANDBOX_SHIM:-$HOME/.local/bin/omp}"
 
 MODE=""
 PI_PATH=""
+OMP_PATH=""
 NODE_PATH=""
 ASSUME_YES=0
 
@@ -53,6 +57,7 @@ while [ $# -gt 0 ]; do
       [ -z "$MODE" ] || die "only one of --detect/--show/--check"
       MODE="${1#--}"; shift ;;
     --pi)   [ $# -ge 2 ] || die "--pi needs an absolute path";   PI_PATH="$2";   MODE="${MODE:-explicit}"; shift 2 ;;
+    --omp)  [ $# -ge 2 ] || die "--omp needs an absolute path";  OMP_PATH="$2";  MODE="${MODE:-explicit}"; shift 2 ;;
     --node) [ $# -ge 2 ] || die "--node needs an absolute path"; NODE_PATH="$2"; MODE="${MODE:-explicit}"; shift 2 ;;
     --yes|-y) ASSUME_YES=1; shift ;;
     -h|--help) usage; exit 0 ;;
@@ -147,8 +152,11 @@ validate_target() {
   [ -d "$canon" ] && die "$label is a directory: $canon"
   [ -x "$canon" ] || die "$label is not executable: $canon"
 
-  local shim_canon; shim_canon="$(canonicalize "$SHIM")"
-  if [ -n "$shim_canon" ] && [ "$canon" = "$shim_canon" ]; then
+  local shim_canon omp_shim_canon
+  shim_canon="$(canonicalize "$SHIM")"
+  omp_shim_canon="$(canonicalize "$OMP_SHIM")"
+  if { [ -n "$shim_canon" ] && [ "$canon" = "$shim_canon" ]; } \
+    || { [ -n "$omp_shim_canon" ] && [ "$canon" = "$omp_shim_canon" ]; }; then
     die "$label resolves to the protected shim itself ($canon); that would loop"
   fi
   if grep -q 'pi-sandbox-guard' "$canon" 2>/dev/null; then
@@ -164,7 +172,9 @@ validate_target() {
   case "$canon" in
     /private/tmp/*|/tmp/*|/var/tmp/*|/private/var/tmp/* \
     |/var/folders/*/T/*|/private/var/folders/*/T/* \
-    |"$home_canon"/.pi/agent/*|"$home_canon"/.npm/*|"$home_canon"/.cache/* \
+    |"$home_canon"/.pi/*|"$home_canon"/.omp/* \
+    |"$home_canon"/.omp-*/*|"$home_canon"/.omp.*/*|"$home_canon"/.omp_*/* \
+    |"$home_canon"/.npm/*|"$home_canon"/.cache/* \
     |"$home_canon"/Library/Caches/*)
       die "$label is inside a sandbox-writable root ($canon); the agent could rewrite it" ;;
   esac
@@ -226,6 +236,29 @@ detect_pi() {
   done
 }
 
+detect_omp() {
+  local c out="" seen=""
+  local -a candidates=(
+    "$HOME/.local/lib/omp/omp"
+    /opt/homebrew/bin/omp
+    /usr/local/bin/omp
+    /opt/homebrew/Cellar/omp/*/bin/omp
+    /usr/local/Cellar/omp/*/bin/omp
+    "$HOME/.bun/bin/omp"
+  )
+  local ambient; ambient="$(command -v omp 2>/dev/null || true)"
+  [ -n "$ambient" ] && candidates+=("$ambient")
+  for c in "${candidates[@]}"; do
+    [ -x "$c" ] || continue
+    out="$(canonicalize "$c")"
+    [ -n "$out" ] || continue
+    grep -q 'pi-sandbox-guard' "$out" 2>/dev/null && continue
+    case "$seen" in *"|$out|"*) continue ;; esac
+    seen="$seen|$out|"
+    printf '%s\n' "$out"
+  done
+}
+
 # Only needed when the entry point is a `node` shebang script.
 needs_interpreter() {
   head -c 128 "$1" 2>/dev/null | head -1 | grep -Eq '^#!.*[ /]node( |$)'
@@ -256,6 +289,7 @@ case "$MODE" in
     [ -f "$CONFIG" ] || { echo "no binding recorded ($CONFIG)"; exit 3; }
     printf 'config: %s\n' "$CONFIG"
     printf 'pi   = %s\n' "$(read_key pi || echo '(unset)')"
+    printf 'omp  = %s\n' "$(read_key omp || echo '(unset)')"
     printf 'node = %s\n' "$(read_key node || echo '(unset — shebang resolves via sanitized PATH)')"
     exit 0 ;;
   check)
@@ -273,6 +307,10 @@ case "$MODE" in
     if ! pi_reason="$(validate_target "$pi_rec" "pi" 2>&1 >/dev/null)"; then
       echo "invalid: ${pi_reason#bind: }"; ok=0
     fi
+    omp_rec="$(read_key omp || true)"
+    if [ -n "$omp_rec" ] && ! omp_reason="$(validate_target "$omp_rec" "omp" 2>&1 >/dev/null)"; then
+      echo "invalid: ${omp_reason#bind: }"; ok=0
+    fi
     node_rec="$(read_key node || true)"
     if [ -n "$node_rec" ]; then
       if ! node_reason="$(validate_target "$node_rec" "node" 2>&1 >/dev/null)"; then
@@ -281,6 +319,7 @@ case "$MODE" in
     fi
     if [ "$ok" -eq 1 ]; then
       echo "binding ok: $pi_rec"
+      [ -n "$omp_rec" ] && echo "omp: $omp_rec"
       [ -n "$node_rec" ] && echo "interpreter: $node_rec"
       exit 0
     fi
@@ -319,17 +358,47 @@ if [ "$MODE" = "detect" ] && [ -z "$PI_PATH" ]; then
   fi
 fi
 
+# Detect OMP when available. An OMP-free host remains a supported Pi-only
+# installation; an existing omp= key is preserved by explicit Pi-only updates.
+if [ "$MODE" = "detect" ] && [ -z "$OMP_PATH" ]; then
+  omp_found=()
+  while IFS= read -r line; do
+    [ -n "$line" ] && omp_found+=("$line")
+  done < <(detect_omp)
+  if [ "${#omp_found[@]}" -gt 0 ]; then
+    OMP_PATH="${omp_found[0]}"
+  else
+    OMP_PATH="$(read_key omp || true)"
+  fi
+elif [ -z "$OMP_PATH" ]; then
+  OMP_PATH="$(read_key omp || true)"
+fi
+
+if [ -z "$PI_PATH" ]; then
+  PI_PATH="$(read_key pi || true)"
+fi
+[ -n "$PI_PATH" ] || die "no Pi path supplied or previously recorded"
+
 PI_CANON="$(validate_target "$PI_PATH" "pi")"
+OMP_CANON=""
+[ -n "$OMP_PATH" ] && OMP_CANON="$(validate_target "$OMP_PATH" "omp")"
 
 if [ -z "$NODE_PATH" ] && needs_interpreter "$PI_CANON"; then
-  NODE_PATH="$(detect_node || true)"
-  [ -n "$NODE_PATH" ] || die "$PI_CANON needs a node interpreter and none was found; pass --node <abs-path>"
+  NODE_PATH="$(read_key node || true)"
+  if [ -z "$NODE_PATH" ]; then
+    NODE_PATH="$(detect_node || true)"
+  fi
+  [ -n "$NODE_PATH" ] \
+    || die "$PI_CANON needs a Node interpreter and none was found; pass --node <abs-path>"
 fi
 NODE_CANON=""
 [ -n "$NODE_PATH" ] && NODE_CANON="$(validate_target "$NODE_PATH" "node")"
 
 echo "About to record:"
 printf '  pi   = %s\n' "$PI_CANON"
+if [ -n "$OMP_CANON" ]; then
+  printf '  omp  = %s\n' "$OMP_CANON"
+fi
 if [ -n "$NODE_CANON" ]; then
   printf '  node = %s\n' "$NODE_CANON"
   printf '  launch = %s %s\n' "$NODE_CANON" "$PI_CANON"
@@ -353,7 +422,7 @@ if [ -f "$CONFIG" ]; then
   awk -F= '
     /^[[:space:]]*($|#)/ { print; next }
     { n=$1; gsub(/^[[:space:]]+|[[:space:]]+$/,"",n)
-      if (n=="pi" || n=="node") next
+      if (n=="pi" || n=="omp" || n=="node") next
       print }' "$CONFIG" >>"$tmp"
 else
   {
@@ -365,6 +434,7 @@ else
   } >>"$tmp"
 fi
 printf 'pi=%s\n' "$PI_CANON" >>"$tmp"
+[ -n "$OMP_CANON" ] && printf 'omp=%s\n' "$OMP_CANON" >>"$tmp"
 [ -n "$NODE_CANON" ] && printf 'node=%s\n' "$NODE_CANON" >>"$tmp"
 chmod 600 "$tmp"
 mv -f "$tmp" "$CONFIG"

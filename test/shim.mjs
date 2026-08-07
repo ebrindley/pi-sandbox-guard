@@ -96,6 +96,12 @@ function fixture() {
   const shim = join(shimDir, 'pi');
   copyFileSync(launcher, shim);
   chmodSync(shim, 0o755);
+  const ompShim = join(shimDir, 'omp');
+  copyFileSync(launcher, ompShim);
+  chmodSync(ompShim, 0o755);
+  const guardExtensionDir = join(shimDir, 'pi-sandbox-guard-extension');
+  mkdirSync(guardExtensionDir);
+  writeFileSync(join(guardExtensionDir, 'index.ts'), 'export default function () {}\n');
   const preambleCopy = join(shimDir, 'pi-sandbox-preamble.zsh');
   copyFileSync(preamble, preambleCopy);
   const profileCopy = join(shimDir, 'pi-sandbox.sb');
@@ -109,7 +115,7 @@ function fixture() {
   );
   chmodSync(real, 0o755);
 
-  return { root, shimDir, realDir, hostileDir, shim, real, profileCopy, preambleCopy };
+  return { root, shimDir, realDir, hostileDir, shim, ompShim, real, profileCopy, preambleCopy };
 }
 
 function baseEnv(fx, extraEnv = {}) {
@@ -121,12 +127,18 @@ function baseEnv(fx, extraEnv = {}) {
     HOME: fx.root,
     PATH: `${fx.shimDir}:${fx.realDir}:/usr/bin:/bin:/usr/sbin:/sbin`,
     PI_EXECUTABLE: undefined,
+    OMP_EXECUTABLE: undefined,
     PI_EXECUTABLE_CONFIG: join(fx.root, 'missing.conf'),
+    PI_CONFIG_DIR: undefined,
+    PI_PROFILE: undefined,
+    OMP_PROFILE: undefined,
     PI_PROJECT: undefined,
     PI_SANDBOX_SHIM_ACTIVE: undefined,
     PI_SANDBOX_PROFILE_DIGEST: undefined,
+    PI_SANDBOX_RUNTIME_ACTIVE: undefined,
     PI_SANDBOX_PROJECT_BOUNDARY: undefined,
     PI_SANDBOX_ACTIVE_HOOKS_BOUNDARY: undefined,
+    PI_SANDBOX_AGENT_STATE_BOUNDARY: undefined,
     PI_SANDBOX_TRANSPARENT: undefined,
     PI_SANDBOX_PROFILE: undefined,
     PI_SANDBOX_SELFTEST: undefined,
@@ -144,6 +156,17 @@ function runShim(fx, extraEnv = {}, args = ['hello']) {
   });
 }
 
+function runOmpShim(fx, extraEnv = {}, args = ['hello']) {
+  return spawnSync(fx.ompShim, args, {
+    encoding: 'utf8',
+    env: baseEnv(fx, {
+      PI_EXECUTABLE: undefined,
+      OMP_EXECUTABLE: TRUSTED_ECHO,
+      ...extraEnv,
+    }),
+  });
+}
+
 function runNestedShim(fx, extraEnv = {}, args = ['nested-ok']) {
   const activeHooks = join(repo, '.githooks');
   return spawnSync(
@@ -153,6 +176,10 @@ function runNestedShim(fx, extraEnv = {}, args = ['nested-ok']) {
       '-D', `HOME=${process.env.HOME}`,
       '-D', `TMPDIR=${realpathSync(tmpdir())}`,
       '-D', `ACTIVE_HOOKS=${activeHooks}`,
+      '-D', `PI_AGENT_STATE=${process.env.HOME}/.pi/agent`,
+      '-D', `OMP_AGENT_STATE=${process.env.HOME}/.pi-sandbox-guard-unused/omp-agent`,
+      '-D', `OMP_STATE_ROOT=${process.env.HOME}/.pi-sandbox-guard-unused/omp-state`,
+      '-D', `OMP_BASE_ROOT=${process.env.HOME}/.pi-sandbox-guard-unused/omp-base`,
       '-f', fx.profileCopy,
       fx.shim,
       ...args,
@@ -162,9 +189,11 @@ function runNestedShim(fx, extraEnv = {}, args = ['nested-ok']) {
       env: baseEnv(fx, {
         PI_EXECUTABLE: TRUSTED_ECHO,
         PI_SANDBOX_SHIM_ACTIVE: '1',
+        PI_SANDBOX_RUNTIME_ACTIVE: 'pi',
         PI_SANDBOX_PROFILE_DIGEST: policyIdFor(fx.profileCopy),
         PI_SANDBOX_PROJECT_BOUNDARY: repo,
         PI_SANDBOX_ACTIVE_HOOKS_BOUNDARY: activeHooks,
+        PI_SANDBOX_AGENT_STATE_BOUNDARY: `${process.env.HOME}/.pi/agent`,
         ...extraEnv,
       }),
     },
@@ -490,14 +519,10 @@ check('a recorded interpreter that vanished fails closed', () => {
     PI_SANDBOX_SELFTEST_CONFIG: config,
   });
   assert.notEqual(r.status, 0);
-  assert.match(r.stderr, /recorded interpreter is no longer usable/);
+  assert.match(r.stderr, /recorded Node interpreter is no longer usable/);
 });
 
-check('PI_EXECUTABLE_KEY cannot select the recorded interpreter as Pi', () => {
-  // The config holds both pi= and node=. PI_EXECUTABLE_KEY is caller-settable
-  // (launchers/pi defaults it to ${0:t}), so honoring it for the executable lookup
-  // would let a wrapper export PI_EXECUTABLE_KEY=node and run the interpreter AS Pi,
-  // skipping Pi's own tool/extension layer entirely.
+check('ambient PI_EXECUTABLE_KEY is rejected instead of selecting another config key', () => {
   const fx = fixture();
   const config = join(fx.root, 'executables.conf');
   writeFileSync(config, `pi=${TRUSTED_ECHO}\nnode=${TRUSTED_TRUE}\n`);
@@ -506,12 +531,8 @@ check('PI_EXECUTABLE_KEY cannot select the recorded interpreter as Pi', () => {
     PI_SANDBOX_SELFTEST_CONFIG: config,
     PI_EXECUTABLE_KEY: 'node',
   });
-  assert.equal(r.status, 0, r.stderr);
-  assert.equal(
-    (r.stdout || '').trim(),
-    TRUSTED_ECHO,
-    'ambient PI_EXECUTABLE_KEY must not redirect the executable lookup',
-  );
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /executable key\/runtime mismatch/);
 });
 
 check('ambient preamble override is ignored', () => {
@@ -626,6 +647,15 @@ nativeCheck('matching digest without boundary markers refuses nested pass-throug
   }, ['no-boundary']);
   assert.notEqual(r.status, 0);
   assert.match(r.stderr, /recorded (project|active-hooks) boundary is unavailable|refusing/);
+});
+
+nativeCheck('cross-runtime nested re-entry fails closed', () => {
+  const fx = fixture();
+  const r = runNestedShim(fx, {
+    PI_SANDBOX_RUNTIME_ACTIVE: 'omp',
+  }, ['cross-runtime']);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /nested profile digest mismatch|confinement probes failed|refusing/);
 });
 
 // --- TMPDIR policy (selftest hook; no full Seatbelt apply required) ---
@@ -803,6 +833,151 @@ nativeCheck('full launch still succeeds when the target is outside PROJECT', () 
   const r = runShim(fx, { PI_EXECUTABLE: TRUSTED_ECHO, PI_PROJECT: proj }, ['outside-ok']);
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /outside-ok/);
+});
+
+nativeCheck('shared launcher selects OMP and injects the protected extension', () => {
+  const fx = fixture();
+  const r = runOmpShim(fx, {}, ['omp-ok']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /Runtime \[omp\]/);
+  assert.match(r.stdout, /--extension/);
+  assert.match(r.stdout, /pi-sandbox-guard-extension\/index\.ts/);
+  assert.match(r.stdout, /omp-ok/);
+});
+
+nativeCheck('Pi administrative commands do not receive agent-only extension flags', () => {
+  const fx = fixture();
+  const r = runShim(fx, { PI_EXECUTABLE: TRUSTED_ECHO }, ['auth', '--help']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stdout, /--extension/);
+  assert.match(r.stdout, /auth --help/);
+});
+
+nativeCheck('OMP administrative commands do not receive agent-only extension flags', () => {
+  const fx = fixture();
+  const r = runOmpShim(fx, {}, ['stats']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.doesNotMatch(r.stdout, /--extension/);
+  assert.match(r.stdout, /stats/);
+});
+
+nativeCheck('OMP ACP agent command keeps the required extension', () => {
+  const fx = fixture();
+  const r = runOmpShim(fx, {}, ['acp']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /--extension/);
+  assert.match(r.stdout, /acp/);
+});
+
+nativeCheck('OMP agent commands that reject extensions fail closed', () => {
+  const fx = fixture();
+  const r = runOmpShim(fx, {}, ['cleanse']);
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /does not accept the required guard extension/);
+  assert.equal((r.stdout || '').trim(), '', 'unsupported agent command must not reach real OMP');
+});
+
+nativeCheck('OMP CLI profile selects the matching sandbox state root', () => {
+  const fx = fixture();
+  const r = runOmpShim(fx, {}, ['--profile', 'work', 'profile-ok']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /OMP state: .*\/\.omp\/profiles\/work/);
+  assert.match(r.stdout, /--profile work/);
+  assert.match(r.stdout, /--extension/);
+});
+
+nativeCheck('OMP leading --profile=<name> selects the matching sandbox state root', () => {
+  const fx = fixture();
+  const r = runOmpShim(fx, {}, ['--profile=work', 'profile-ok']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stderr, /OMP state: .*\/\.omp\/profiles\/work/);
+  assert.match(r.stdout, /--profile=work/);
+});
+
+check('OMP refuses late or duplicate profile flags before launch', () => {
+  for (const args of [
+    ['--system-prompt', '--profile', 'work'],
+    ['--profile', 'work', '--profile=other', 'profile-no'],
+  ]) {
+    const fx = fixture();
+    const r = runOmpShim(fx, {}, args);
+    assert.notEqual(r.status, 0);
+    assert.match(r.stderr, /requires --profile to be the first argument and specified once/);
+    assert.equal((r.stdout || '').trim(), '', 'ambiguous profile arguments must not reach real OMP');
+  }
+});
+
+check('bound Pi executable inside relocated Pi state is classified writable', () => {
+  const fx = fixture();
+  const alternate = join(homedir(), '.pi', 'alternate-agent');
+  const target = join(alternate, 'bin', 'pi');
+  const r = runSelftest(fx, 'write-root', {
+    PI_CODING_AGENT_DIR: alternate,
+    PI_SANDBOX_SELFTEST_TARGET: target,
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /writable/);
+});
+
+check('bound OMP executable inside alternate OMP state is classified writable', () => {
+  const fx = fixture();
+  const stateRoot = join(homedir(), '.omp-work');
+  const target = join(stateRoot, 'natives', 'omp');
+  const r = runSelftest(fx, 'write-root', {
+    PI_SANDBOX_RUNTIME: 'omp',
+    PI_EXECUTABLE_KEY: 'omp',
+    PI_CONFIG_DIR: '.omp-work',
+    PI_SANDBOX_SELFTEST_TARGET: target,
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /writable/);
+});
+
+nativeCheck('guard Node binding inside PROJECT is refused before launch', () => {
+  const fx = fixture();
+  const project = bindableDir();
+  const node = join(project, 'guard-node');
+  copyFileSync(TRUSTED_TRUE, node);
+  chmodSync(node, 0o755);
+  writeFileSync(join(fx.shimDir, 'pi-sandbox-guard-extension', '.guard-node'), `${node}\n`);
+
+  const r = runShim(
+    fx,
+    { PI_EXECUTABLE: TRUSTED_ECHO, PI_PROJECT: project },
+    ['x'],
+  );
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /guard Node.*sandbox-writable root/i);
+});
+
+check('OMP agent-dir override outside its state root is refused', () => {
+  const fx = fixture();
+  const r = runOmpShim(fx, {
+    PI_CODING_AGENT_DIR: '/private/tmp/omp-agent-outside-root',
+  });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /does not support relocating PI_CODING_AGENT_DIR/);
+});
+
+check('Pi agent-dir relocation into the canonical extension tree is refused', () => {
+  const fx = fixture();
+  const r = runShim(fx, {
+    PI_EXECUTABLE: TRUSTED_ECHO,
+    PI_CODING_AGENT_DIR: join(homedir(), '.pi', 'agent', 'extensions'),
+  });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /cannot be the default agent root's parent or descendant/);
+});
+
+check('Pi agent-dir relocation outside ~/.pi is refused', () => {
+  const fx = fixture();
+  const r = runShim(fx, {
+    PI_EXECUTABLE: TRUSTED_ECHO,
+    PI_CODING_AGENT_DIR: '/private/tmp/pi-agent-outside-root',
+  });
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /requires PI_CODING_AGENT_DIR to stay under ~\/\.pi/);
+  assert.equal((r.stdout || '').trim(), '', 'unsupported Pi state must not reach real Pi');
 });
 
 console.log(results.join('\n'));

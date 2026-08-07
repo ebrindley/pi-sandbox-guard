@@ -1,12 +1,12 @@
 #!/usr/bin/env bash
 #
-# deploy-launchers.sh — install the protected pi shim, the SBPL profile, the
+# deploy-launchers.sh — install the shared protected pi/omp shim, the SBPL profile, the
 # preamble, and any extra launchers into ~/.local/bin, backing up existing copies.
 #
 # Source of truth: this repo (launchers/, sandbox/). Deployed copies are artifacts.
 # Mirrors deploy-local.sh: validate, back up, install, verify.
 #
-# The protected `pi` shim is the only launcher this repo installs by default.
+# The protected `pi` and `omp` shims are the same canonical launcher file.
 # Custom wrappers (a local model server, a per-provider preset, …) live OUTSIDE
 # the repo and are opted in explicitly with --extra-launchers. They are linted
 # BEFORE any file is installed and the deploy refuses as a whole if one fails:
@@ -65,11 +65,11 @@ done
 
 # --- Launcher set: the first-party protected shim, plus opted-in extras. ---
 # Parallel arrays (bash 3.2 has no associative arrays): NAMES[i] installs from SRCS[i].
-LAUNCHER_NAMES=(pi)
-LAUNCHER_SRCS=("$REPO_ROOT/launchers/pi")
+LAUNCHER_NAMES=(pi omp)
+LAUNCHER_SRCS=("$REPO_ROOT/launchers/pi" "$REPO_ROOT/launchers/pi")
 [ -f "$REPO_ROOT/launchers/pi" ] || die "missing launcher source: launchers/pi"
 
-# `pi` is reserved: an extra directory supplying its own `pi` would replace the
+# `pi` and `omp` are reserved: an extra directory supplying either would replace the
 # protected shim with an unvetted file — the exact bypass this repo exists to stop.
 # Duplicate basenames across extra dirs are refused rather than silently last-wins.
 for dir in ${EXTRA_DIRS+"${EXTRA_DIRS[@]}"}; do
@@ -82,7 +82,9 @@ for dir in ${EXTRA_DIRS+"${EXTRA_DIRS[@]}"}; do
     esac
     [ -L "$src" ] && die "--extra-launchers: refusing symlink (install real files only): $src"
     [ -f "$src" ] || die "--extra-launchers: not a regular file: $src"
-    [ "$name" = "pi" ] && die "--extra-launchers: 'pi' is reserved for the protected shim: $src"
+    case "$name" in
+      pi|omp) die "--extra-launchers: '$name' is reserved for the protected shim: $src" ;;
+    esac
     # The provenance stamp records names as a comma-separated line, so a name
     # containing a comma/newline (or shell-hostile characters) would be re-parsed
     # as two launchers and make `status` verify the wrong paths. Restrict to a
@@ -305,8 +307,8 @@ fi
 
 COMMITTED=1
 say ""
-say "[deploy-launchers] DONE. Protected pi shim and launchers installed."
+say "[deploy-launchers] DONE. Shared protected pi/omp shims and launchers installed."
 say "[deploy-launchers] release_id=$RELEASE_ID"
 say "[deploy-launchers] Ensure $DEST is earlier on PATH than the real Pi binary."
 say "[deploy-launchers] installed launchers: ${LAUNCHER_NAMES[*]}"
-say "[deploy-launchers] Run 'pi' from inside a project; call the real Pi binary directly to bypass."
+say "[deploy-launchers] Run 'pi' or 'omp' inside a project; call a real binary directly to bypass."

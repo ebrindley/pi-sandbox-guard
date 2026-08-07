@@ -12,7 +12,8 @@ where each one fails. Two layers, and the weaker one is not the fail-safe:
 
 Pi has **no built-in sandbox** by design (its own `security.md` says isolation
 "needs to come from the operating system or a virtualization/container
-boundary"). So we wrap the launcher in macOS Seatbelt (`sandbox-exec`), the same
+boundary"). OMP also needs a host boundary. The shared launcher wraps either
+runtime in macOS Seatbelt (`sandbox-exec`), the same
 mechanism Chrome, VS Code, Codex CLI, and Claude Code use.
 
 > **Deprecation exposure:** Apple marks `sandbox-exec` as deprecated, but it
@@ -49,7 +50,7 @@ proof.**
 ## How the analyzer filter works
 
 ```
-Pi tool_call(bash)  ──▶  index.mjs (adapter)  ──▶  guard-core.mjs  ──▶  bash validate-bash-command.sh
+Pi/OMP tool_call(bash) ─▶ index.mjs (adapter) ─▶ guard-core.mjs ─▶ bash validate-bash-command.sh
                                                           │                     (analyzes command STRING,
    { block, reason } ◀── map decision ◀── allow/ask/block │                      never executes it)
 ```
@@ -364,7 +365,7 @@ project-controlled content (hooks, `package.json` scripts, Makefiles, etc.).
 |---|---|---|
 | `sandbox/pi-sandbox.sb` | `~/.local/bin/pi-sandbox.sb` | SBPL profile (the boundary) |
 | `sandbox/pi-sandbox-preamble.zsh` | `~/.local/bin/pi-sandbox-preamble.zsh` | Shared preamble: boundary calc, fail-closed checks, builds the `sandbox-exec` argv |
-| `launchers/pi` | `~/.local/bin/pi` | Protected PATH entrypoint that wraps the real Pi binary |
+| `launchers/pi` | `~/.local/bin/{pi,omp}` | One protected entrypoint installed under both canonical names |
 | `launchers/example-custom` | (template; not auto-installed) | Documented contract for custom wrappers opted in via `--extra-launchers` |
 | `scripts/deploy-launchers.sh` | — | Validates the profile, backs up originals, installs, stamps provenance |
 
@@ -376,7 +377,7 @@ npm run deploy:all
 npm run status            # read-only drift / release-identity check
 
 # Two-step path (current package.json scripts):
-npm run deploy            # guard extension -> ~/.pi/agent/extensions/
+npm run deploy            # shared extension -> ~/.pi/agent/extensions/
 npm run deploy:launchers  # shim + profile -> ~/.local/bin
 ```
 
@@ -384,9 +385,9 @@ npm run deploy:launchers  # shim + profile -> ~/.local/bin
 by delegating to `scripts/test-sandbox-profile.sh` (forced real run, never
 skipped): the profile must compile and apply; an in-project write must be
 allowed; active-hook writes must be denied while routine `.git/config` stays
-writable; a write to the real home dir must be denied; `~/.pi/agent/sessions`
-writable but `settings.json` / `auth.json` / `trust.json` / prompt files /
-`extensions/` writes denied; `~/.ssh` and project `.env` reads denied; a project
+writable; a write to the real home dir must be denied; Pi sessions and OMP
+operational state writable while both runtimes' config/extension surfaces stay
+denied; `~/.ssh` and project `.env` reads denied; a project
 `.pem` read allowed (no over-restriction). It backs up any existing launcher to
 `*.bak.<timestamp>` and writes `~/.local/bin/.pi-sandbox-launchers-version` (git
 sha + dirty flag + profile hash).
@@ -421,11 +422,19 @@ Component-only deployment remains available through `deploy` and
   **brand-new, not-yet-git directory works**, the agent can `git init` and
   scaffold a fresh project. Only genuinely broad roots are refused (see below).
 - `$TMPDIR` (canonical, validated) and `/private/tmp`
-- `~/.pi/agent` **except** `settings.json`, `auth.json`, `trust.json`,
+- active Pi state **except** `settings.json`, `auth.json`, `trust.json`,
   any `*prompt*.md`, `extensions/` (so the sandboxed Pi cannot tamper with
   config/auth/trust/prompt state or **disable the guard**)
 - `~/.npm`, `~/.cache`, `~/Library/Caches` (so npm/pip/uv/playwright work)
+- OMP sessions, blobs, operational databases, logs, worktrees, and managed
+  runtime/cache paths under the active OMP profile. This is a positive allowlist,
+  not a blanket `~/.omp` grant.
 - a narrow `/dev` set (`null`, `tty`, `stdout`, `stderr`, `fd/1`, `fd/2`, `ttys*`)
+
+**OMP write-denied:** plugins, extensions, hooks, custom tools, commands,
+skills, agents, prompts, rules, instructions, model/MCP/SSH configuration, and
+dotenv files. OMP's mixed operational/auth `agent.db` remains writable because
+normal OMP operation cannot separate those concerns at file granularity.
 
 **Read-denied** (everything else is readable, including all project files except
 as listed):
@@ -457,6 +466,8 @@ implementation denies the
   hooks path (**ACTIVE_HOOKS** parameter)
 - linked worktree and submodule metadata hooks under paths such as
   `PROJECT/.git/modules/**/hooks` when they are part of the active hooks surface
+- hook trees inside OMP-managed checkouts/worktrees under the active `wt/`
+  runtime path (directory nodes and inert `*.sample` files remain writable)
 
 `.git/config` remains writable for routine `git remote` / tracking use. That
 means residual risk remains if config can repoint hooks or aliases in ways the
@@ -491,7 +502,7 @@ trusted; **PROJECT contents and ambient repo env** are not.
 
 ## Fail-closed behavior
 
-The protected `pi` shim **refuses to start** (rather than running Pi
+The protected `pi`/`omp` shim **refuses to start** (rather than running an agent
 unprotected) when:
 - `sandbox-exec` or the profile is missing
 - the project boundary resolves to a **broad/unsafe root**: `/`, `$HOME`,
@@ -501,9 +512,10 @@ unprotected) when:
 - the project boundary would contain the sandbox install directory itself
 - nested re-entry cannot prove expected confinement (strict nested handling)
 
-When the transparent `pi` shim is re-entered from an **already correctly
+When a transparent shim is re-entered from an **already correctly
 confined** own-shim session (e.g. a subagent invoking `pi` again through PATH),
-it may pass through to the real Pi instead of double-wrapping. Explicit
+it may pass through to the real runtime instead of double-wrapping. Runtime
+identity must match, so cross-runtime nesting fails closed. Explicit
 non-transparent launchers retain fail-closed nested-sandbox behavior. Unknown
 parent sandboxes are not trusted by env marker alone.
 
@@ -512,9 +524,14 @@ work). Refusal is strictly about over-broad boundaries, not "is this a repo".
 
 ### Bypass
 
-The protected shim intentionally pins its preamble/profile and forces sandbox mode
-so a repo-local environment cannot disable it before launch. To run without the OS
-sandbox, call the real Pi binary directly, such as `/opt/homebrew/bin/pi`; the
+The protected shim pins its preamble/profile, derives a closed runtime identity
+from its canonical basename, explicitly injects the shared extension into agent
+sessions even under `--no-extensions`, and forces sandbox mode. Native
+administrative subcommands run inside Seatbelt without the agent-only extension
+flag. OMP agent subcommands that cannot accept the required extension fail
+closed instead of running without the bash analyzer. To run without the OS sandbox, call
+the real binary directly, such as `/opt/homebrew/bin/pi` or
+`~/.local/lib/omp/omp`; the
 guard extension may still load, but the Seatbelt layer is bypassed.
 
 ## Persistence risks (hooks, submodules, worktrees)
@@ -539,7 +556,7 @@ pointers) before running unsandboxed git or builds. Prefer running those steps
 only on reviewed state. Committed history helps recovery; uncommitted secrets do
 not.
 
-## Known limitations (need an unsandboxed direct Pi run)
+## Known limitations (need an unsandboxed direct agent run)
 
 - **Private npm registries / auth**: `~/.npmrc` is read-denied and
   `NPM_CONFIG_USERCONFIG=/dev/null` is set, so public npm works but private
@@ -557,6 +574,12 @@ not.
 - **Provider tokens in the Pi process**: write-denying `auth.json` stops
   *tampering* with stored auth from inside the sandbox; it does **not** hide
   tokens already loaded by Pi or tool children. See [SECURITY.md](../SECURITY.md).
+- **OMP administration**: updates, plugin installation, and active XDG-split
+  state roots require the real OMP binary. Protected OMP keeps plugin/config/
+  extension surfaces read-only.
+- **OMP `agent.db`**: operational data and credentials share one SQLite file,
+  so normal runtime writes also mean file-level auth tamper resistance cannot be
+  claimed for OMP.
 
 ## What is fixed vs structural
 

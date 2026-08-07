@@ -42,6 +42,7 @@ async function loadHandler() {
   process.env.PI_SANDBOX_PROFILE_DIGEST = 'test-suite-nonempty';
   const mod = await import('../src/index.mjs');
   try {
+    mod.resetEventStateForTests();
     mod.default(pi);
   } finally {
     if (prev === undefined) delete process.env.PI_SANDBOX_PROFILE_DIGEST;
@@ -72,6 +73,7 @@ async function loadCapturingStderr(digest, tag) {
   const calls = [];
   try {
     const mod = await import(`../src/index.mjs?filter-only=${tag}`);
+    mod.resetEventStateForTests();
     mod.default({
       isToolCallEventType: (n, e) => n === 'bash' && e.toolName === 'bash',
       on: (t, h) => {
@@ -88,6 +90,75 @@ async function loadCapturingStderr(digest, tag) {
 
 async function main() {
   const handler = await loadHandler();
+
+  await check('duplicate extension handlers analyze one tool event once', async () => {
+    const firstCalls = [];
+    const secondCalls = [];
+    const firstPi = {
+      isToolCallEventType: (n, e) => n === 'bash' && e.toolName === 'bash',
+      on: (t, h) => {
+        if (t === 'tool_call') firstCalls.push(h);
+      },
+    };
+    const secondPi = {
+      isToolCallEventType: (n, e) => n === 'bash' && e.toolName === 'bash',
+      on: (t, h) => {
+        if (t === 'tool_call') secondCalls.push(h);
+      },
+    };
+    const firstMod = await import('../src/index.mjs?duplicate-registration-first');
+    const secondMod = await import('../src/index.mjs?duplicate-registration-second');
+    firstMod.resetEventStateForTests();
+    firstMod.default(firstPi);
+    secondMod.default(secondPi);
+    assert.equal(firstCalls.length, 1);
+    assert.equal(secondCalls.length, 1, 'fresh session APIs must each receive a handler');
+    const event = bashEvent('ls -la');
+    await Promise.all([firstCalls[0](event, {}), secondCalls[0](event, {})]);
+    assert.equal(
+      firstMod.processedEventCountForTests(),
+      1,
+      'duplicate handlers must analyze one emitted tool event once',
+    );
+  });
+
+  await check('different installed guard copies each analyze for worst-verdict dispatch', async () => {
+    const { mkdtempSync, mkdirSync, copyFileSync, rmSync } = await import('node:fs');
+    const { join, dirname } = await import('node:path');
+    const { fileURLToPath, pathToFileURL } = await import('node:url');
+    const here = dirname(fileURLToPath(import.meta.url));
+    const repoRoot = join(here, '..');
+    const root = mkdtempSync(join(tmpdir(), 'pi-sandbox-guard-copy-'));
+    mkdirSync(join(root, 'src'));
+    for (const file of ['index.mjs', 'guard-core.mjs', 'validate-bash-command.sh']) {
+      copyFileSync(join(repoRoot, 'src', file), join(root, 'src', file));
+    }
+
+    const firstCalls = [];
+    const secondCalls = [];
+    try {
+      const firstMod = await import('../src/index.mjs?copy-one');
+      const secondMod = await import(pathToFileURL(join(root, 'src', 'index.mjs')).href);
+      firstMod.resetEventStateForTests();
+      firstMod.default({
+        isToolCallEventType: (n, e) => n === 'bash' && e.toolName === 'bash',
+        on: (t, h) => t === 'tool_call' && firstCalls.push(h),
+      });
+      secondMod.default({
+        isToolCallEventType: (n, e) => n === 'bash' && e.toolName === 'bash',
+        on: (t, h) => t === 'tool_call' && secondCalls.push(h),
+      });
+      const event = bashEvent('ls -la');
+      await Promise.all([firstCalls[0](event, {}), secondCalls[0](event, {})]);
+      assert.equal(
+        firstMod.processedEventCountForTests(),
+        2,
+        'different physical copies must retain independent verdicts',
+      );
+    } finally {
+      rmSync(root, { recursive: true, force: true });
+    }
+  });
 
   await check('non-bash tool -> pass through (undefined)', async () => {
     const r = await handler({ toolName: 'read', input: { path: '/etc/hosts' } }, {});
@@ -244,6 +315,7 @@ async function main() {
     try {
       const mod = await import(pathToFileURL(join(root, 'src', 'index.mjs')).href);
       const calls = [];
+      mod.resetEventStateForTests();
       mod.default({
         isToolCallEventType: (n, e) => n === 'bash' && e.toolName === 'bash',
         on: (t, h) => {

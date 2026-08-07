@@ -22,6 +22,7 @@ const checkDeployed =
 
 const deployedRoot = process.env.PI_SANDBOX_DEPLOYED_ROOT || join(home, '.local', 'bin');
 const deployedPiPath = join(deployedRoot, 'pi');
+const deployedOmpPath = join(deployedRoot, 'omp');
 const deployedPreamblePath = join(deployedRoot, 'pi-sandbox-preamble.zsh');
 const deployedProfilePath = join(deployedRoot, 'pi-sandbox.sb');
 
@@ -330,8 +331,29 @@ function checkPiShim(path, { required }) {
   if (!content.includes('PI_SANDBOX=1')) {
     fail(`${path} does not force sandbox mode before sourcing the preamble`);
   }
+  if (!content.includes('PI_SANDBOX_RUNTIME="${0:A:t}"')) {
+    fail(`${path} does not derive runtime identity from the canonical launcher basename`);
+  }
+  if (!content.includes('pi|omp)')) {
+    fail(`${path} does not restrict runtime identity to the closed pi/omp set`);
+  }
+  if (!content.includes('PI_EXECUTABLE_KEY="$PI_SANDBOX_RUNTIME"')) {
+    fail(`${path} does not pin the executable binding key to runtime identity`);
+  }
   if (!content.includes('PI_SANDBOX_PROFILE="$PI_SANDBOX_INSTALL_DIR/pi-sandbox.sb"')) {
     fail(`${path} does not pin the sandbox profile to the launcher install dir`);
+  }
+  if (!content.includes('--extension "$PI_SANDBOX_GUARD_EXTENSION"')) {
+    fail(`${path} does not inject the shared guard extension explicitly`);
+  }
+  if (!content.includes('is_runtime_command "$PI_SANDBOX_RUNTIME" "$@"')) {
+    fail(`${path} does not keep agent-only extension flags out of runtime administrative commands`);
+  }
+  if (!content.includes('export OMP_PROFILE=')) {
+    fail(`${path} does not mirror OMP --profile into the pre-sandbox state boundary`);
+  }
+  if (!content.includes('executable_under_sandbox_write_root')) {
+    fail(`${path} does not validate the pinned guard Node against active writable roots`);
   }
 }
 
@@ -367,6 +389,17 @@ function checkPreamble(path, { required }) {
   }
   if (!preamble.includes('-D "ACTIVE_HOOKS=$ACTIVE_HOOKS"')) {
     fail(`${path} does not pass ACTIVE_HOOKS to sandbox-exec`);
+  }
+  for (const parameter of ['PI_AGENT_STATE', 'OMP_AGENT_STATE', 'OMP_STATE_ROOT', 'OMP_BASE_ROOT']) {
+    if (!preamble.includes(`-D "${parameter}=$${parameter}"`)) {
+      fail(`${path} does not pass ${parameter} to sandbox-exec`);
+    }
+  }
+  if (!preamble.includes('PI_SANDBOX_RUNTIME_ACTIVE')) {
+    fail(`${path} does not bind nested re-entry to the active runtime`);
+  }
+  if (!preamble.includes('unused_root="/private/tmp/pi-sandbox-guard-unused"')) {
+    fail(`${path} gives inactive runtime parameters a new HOME write root`);
   }
   // Node must be resolved from trusted absolute candidates, never ambient PATH.
   // Checked as a property (every candidate is under a trusted prefix, and at least
@@ -410,37 +443,47 @@ function checkProfile(path, { required }) {
 
   const profile = normalizeWhitespace(stripFullLineComments(read(path), ';'));
   const requiredWriteDeny = '(deny file-write*)';
-  // Hook persistence: default .git/hooks + ACTIVE_HOOKS (effective core.hooksPath /
-  // linked-worktree hooks) + submodule metadata hooks under .git/modules/**/hooks.
-  // Submodule match is require-all(subpath PROJECT/.git/modules, regex /hooks) so the
-  // regex is never an unscoped write hole.
-  const requiredPiAgentDenyBlock = `
-    (deny file-write*
-      (subpath (string-append (param "PROJECT") "/.git/hooks"))
-      (subpath (param "ACTIVE_HOOKS"))
-      (require-all
-        (subpath (string-append (param "PROJECT") "/.git/modules"))
-        (regex #"/hooks(/|$)"))
-      (subpath (string-append (param "HOME") "/.pi/agent/extensions"))
-      (literal (string-append (param "HOME") "/.pi/agent/settings.json"))
-      (literal (string-append (param "HOME") "/.pi/agent/auth.json"))
-      (literal (string-append (param "HOME") "/.pi/agent/trust.json"))
-      (require-all
-        (subpath (string-append (param "HOME") "/.pi/agent"))
-        (regex #"/\\.pi/agent/.*prompt[^/]*\\.md$"))
-      (subpath (string-append (param "HOME") "/.ssh"))
-      (subpath (string-append (param "HOME") "/.aws"))
-      (subpath (string-append (param "HOME") "/.docker"))
-      (subpath (string-append (param "HOME") "/.gnupg"))
-      (subpath (string-append (param "HOME") "/.kube"))
-      (subpath (string-append (param "HOME") "/.config/gh"))
-      (subpath (string-append (param "HOME") "/.config/gcloud"))
-      (literal (string-append (param "HOME") "/.git-credentials"))
-      (literal (string-append (param "HOME") "/.config/git/credentials"))
-      (literal (string-append (param "HOME") "/.netrc"))
-      (literal (string-append (param "HOME") "/.npmrc"))
-      (subpath (string-append (param "HOME") "/.secrets")))
-  `;
+  const requiredWriteDenyFragments = [
+    '(subpath (string-append (param "PROJECT") "/.git/hooks"))',
+    '(subpath (param "ACTIVE_HOOKS"))',
+    `(require-all
+       (subpath (string-append (param "PROJECT") "/.git/modules"))
+       (regex #"/hooks(/|$)"))`,
+    '(subpath (string-append (param "PI_AGENT_STATE") "/extensions"))',
+    '(literal (string-append (param "PI_AGENT_STATE") "/settings.json"))',
+    '(literal (string-append (param "PI_AGENT_STATE") "/auth.json"))',
+    '(literal (string-append (param "PI_AGENT_STATE") "/trust.json"))',
+    '(subpath (string-append (param "HOME") "/.pi/agent/extensions"))',
+    '(literal (string-append (param "HOME") "/.pi/agent/settings.json"))',
+    '(literal (string-append (param "HOME") "/.pi/agent/auth.json"))',
+    '(literal (string-append (param "HOME") "/.pi/agent/trust.json"))',
+    `(require-all
+       (subpath (param "PI_AGENT_STATE"))
+       (regex #"/.*prompt[^/]*\\.md$"))`,
+    `(require-all
+       (subpath (string-append (param "HOME") "/.pi/agent"))
+       (regex #"/.*prompt[^/]*\\.md$"))`,
+    '(subpath (string-append (param "OMP_AGENT_STATE") "/extensions"))',
+    '(subpath (string-append (param "OMP_AGENT_STATE") "/hooks"))',
+    '(subpath (string-append (param "OMP_AGENT_STATE") "/tools"))',
+    '(literal (string-append (param "OMP_AGENT_STATE") "/config.yml"))',
+    '(subpath (string-append (param "OMP_STATE_ROOT") "/plugins"))',
+    `(require-all
+       (subpath (string-append (param "OMP_STATE_ROOT") "/wt"))
+       (regex #"/hooks(/|$)"))`,
+    '(subpath (string-append (param "HOME") "/.ssh"))',
+    '(subpath (string-append (param "HOME") "/.aws"))',
+    '(subpath (string-append (param "HOME") "/.docker"))',
+    '(subpath (string-append (param "HOME") "/.gnupg"))',
+    '(subpath (string-append (param "HOME") "/.kube"))',
+    '(subpath (string-append (param "HOME") "/.config/gh"))',
+    '(subpath (string-append (param "HOME") "/.config/gcloud"))',
+    '(literal (string-append (param "HOME") "/.git-credentials"))',
+    '(literal (string-append (param "HOME") "/.config/git/credentials"))',
+    '(literal (string-append (param "HOME") "/.netrc"))',
+    '(literal (string-append (param "HOME") "/.npmrc"))',
+    '(subpath (string-append (param "HOME") "/.secrets"))',
+  ];
   // Hooks subtrees denied above; git init / submodule-init minimum re-allowed:
   // default hooks dir node + *.sample, plus submodule hooks dir nodes + *.sample.
   // Active hooks (and non-sample names) stay denied. ACTIVE_HOOKS is not re-allowed.
@@ -455,7 +498,13 @@ function checkProfile(path, { required }) {
         (regex #"/hooks$"))
       (require-all
         (subpath (string-append (param "PROJECT") "/.git/modules"))
-        (regex #"/hooks/[^/]*\\.sample$")))
+        (regex #"/hooks/[^/]*\\.sample$"))
+      (require-all
+        (subpath (string-append (param "OMP_STATE_ROOT") "/wt"))
+        (regex #"/hooks$"))
+      (require-all
+        (subpath (string-append (param "OMP_STATE_ROOT") "/wt"))
+        (regex #"/hooks/[^/]*\\.[^/]+$")))
   `;
   const requiredCredentialReadDenyBlock = `
     (deny file-read*
@@ -485,8 +534,24 @@ function checkProfile(path, { required }) {
   if (!profile.includes(normalizeWhitespace(requiredWriteDeny))) {
     fail(`${path} is missing the blanket file-write deny`);
   }
-  if (!profile.includes(normalizeWhitespace(requiredPiAgentDenyBlock))) {
-    fail(`${path} is missing the pi agent config/auth/extensions write-deny block (incl. ACTIVE_HOOKS + submodule hooks)`);
+  if (profile.includes(normalizeWhitespace('(subpath (param "OMP_STATE_ROOT"))'))) {
+    fail(`${path} broadly allows the whole OMP state root instead of a positive runtime allowlist`);
+  }
+  for (const fragment of [
+    '(subpath (string-append (param "OMP_AGENT_STATE") "/sessions"))',
+    '(literal (string-append (param "OMP_AGENT_STATE") "/agent.db"))',
+    '(literal (string-append (param "OMP_AGENT_STATE") "/agent.db-journal"))',
+    '(subpath (string-append (param "OMP_STATE_ROOT") "/logs"))',
+    '(subpath (string-append (param "OMP_STATE_ROOT") "/wt"))',
+  ]) {
+    if (!profile.includes(normalizeWhitespace(fragment))) {
+      fail(`${path} is missing required OMP runtime allow: ${normalizeWhitespace(fragment)}`);
+    }
+  }
+  for (const fragment of requiredWriteDenyFragments) {
+    if (!profile.includes(normalizeWhitespace(fragment))) {
+      fail(`${path} is missing required write-deny fragment: ${normalizeWhitespace(fragment)}`);
+    }
   }
   if (!profile.includes(normalizeWhitespace(requiredGitHooksReallowBlock))) {
     fail(`${path} is missing the git-hooks re-allow block (dir node + *.sample for git init / submodule init)`);
@@ -499,7 +564,7 @@ function checkProfile(path, { required }) {
 if (explicitSources.length > 0) {
   // Pre-install gate: each path is either the protected shim or a custom wrapper.
   for (const path of explicitSources) {
-    if (basename(path) === 'pi') {
+    if (basename(path) === 'pi' || basename(path) === 'omp') {
       checkPiShim(path, { required: true });
     } else {
       checkLauncher(path, { required: true });
@@ -525,8 +590,9 @@ if (checkDeployed) {
     fail(`--deployed requested but no deployed launcher artifacts found under ${deployedRoot}`);
   }
   checkPiShim(deployedPiPath, { required: true });
+  checkPiShim(deployedOmpPath, { required: true });
   for (const name of deployedNames) {
-    if (name === 'pi') continue;
+    if (name === 'pi' || name === 'omp') continue;
     checkLauncher(join(deployedRoot, name), { required: true });
   }
   checkPreamble(deployedPreamblePath, { required: true });

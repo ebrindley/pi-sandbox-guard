@@ -123,6 +123,26 @@ async function main() {
     assert.equal(pf.ok, false);
   });
 
+  await check('deployed corrupt .guard-node binding fails closed', async () => {
+    const deployedRoot = mkdtempSync(join(tmpdir(), 'pi-sandbox-guard-bad-binding-'));
+    mkdirSync(join(deployedRoot, 'src'));
+    copyFileSync(join(srcDir, 'guard-core.mjs'), join(deployedRoot, 'src', 'guard-core.mjs'));
+    copyFileSync(
+      join(srcDir, 'validate-bash-command.sh'),
+      join(deployedRoot, 'src', 'validate-bash-command.sh'),
+    );
+    writeFileSync(join(deployedRoot, '.guard-node'), 'relative-node-is-invalid\n');
+    const deployedCore = await import(
+      `${pathToFileURL(join(deployedRoot, 'src', 'guard-core.mjs')).href}?bad-binding`
+    );
+    const pf = await deployedCore.preflight();
+    assert.ok(
+      pf.missing.includes('node(GUARD_NODE)'),
+      `corrupt deployed binding did not fail closed: ${JSON.stringify(pf)}`,
+    );
+    assert.equal(pf.ok, false);
+  });
+
   // Degraded mode must remain fail-closed for ask-tier commands too (no silent
   // headless allow, and no path that re-opens bash while the guard is down).
   await check('degraded: ask-tier command is BLOCKED (no headless allow)', async () => {

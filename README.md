@@ -1,6 +1,6 @@
 # pi-sandbox-guard
 
-**Keeps the [Pi coding agent](https://pi.dev) from writing outside your project**
+**Keeps [Pi](https://pi.dev) and [Oh My Pi](https://omp.sh) from writing outside your project**
 (bar temp dirs and tool caches; see Scope below).
 
 macOS-only. Uses Seatbelt (`sandbox-exec`), the same OS sandbox Chrome, VS Code,
@@ -19,26 +19,33 @@ landing.
 git clone https://github.com/ebrindley/pi-sandbox-guard.git && cd pi-sandbox-guard && npm run setup
 ```
 
-That is the whole install. It deploys the bash filter, the Seatbelt profile, and a
-protected `pi` shim, records which Pi to launch, and checks that a plain `pi`
-resolves to the shim. If `~/.local/bin` is missing from your `PATH` or sits after
-the real Pi, setup fails and tells you what to add where.
+That deploys one bash filter, one Seatbelt profile, and the same protected launcher
+as both `pi` and `omp`. It records installed runtimes and checks PATH ordering.
+Pi is required; OMP is optional. Install OMP's official binary outside
+`~/.local/bin` so that directory remains reserved for the protected shims.
 
 ## Use
 
 ```bash
 cd /path/to/your/project && pi
+# or
+cd /path/to/your/project && omp
 ```
 
-You should see `OS sandbox ON. Project [...]` at startup. That line is how you
+For an OMP profile, put the selector first: `omp --profile work`.
+
+You should see `OS sandbox ON. Runtime [...]` at startup. That line is how you
 know you are protected. If it is missing, run `npm run check:path` from the
 checkout.
 
 ## Scope
 
 Writes and deletes outside your project are blocked at the kernel, bar an
-allow-list (temp dirs, tool caches, and Pi's own runtime state). Pi's config,
-auth, and installed extensions stay denied, so it cannot disable this guard.
+allow-list (temp dirs, tool caches, and agent runtime state). Pi config/auth and
+both agents' extensions stay protected. OMP gets a positive state allowlist:
+sessions and operational databases work, while plugins, hooks, tools, prompts,
+rules, and configuration remain read-only. OMP's `agent.db` mixes runtime and
+auth data, so it remains writable; this is an explicit OMP limitation.
 Selected credential paths are read-denied.
 
 **Not protected:** files inside your project (the agent edits code, so review
@@ -50,8 +57,8 @@ Full boundary table, the two layers and how they fail, and known analyzer gaps:
 
 ## Requirements
 
-Nothing to install beyond Pi itself. macOS 15+ only, Apple Silicon or Intel. Any
-model provider Pi supports.
+macOS 15+ only, Apple Silicon or Intel. Pi is required and installed separately;
+OMP's official prebuilt binary is optional. Any provider the selected agent supports.
 
 Other install paths, custom launchers, per-install-method notes, env config, and
 testing: [docs/SETUP.md](docs/SETUP.md).

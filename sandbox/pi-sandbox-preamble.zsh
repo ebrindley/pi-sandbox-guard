@@ -28,6 +28,7 @@ typeset -r ID_BIN="/usr/bin/id"
 typeset -r DSCL_BIN="/usr/bin/dscl"
 typeset -r SHASUM_BIN="/usr/bin/shasum"
 typeset -r STAT_BIN="/usr/bin/stat"
+typeset -r HEAD_BIN="/usr/bin/head"
 
 # Git repository/config selectors are launch-boundary inputs: if inherited, they
 # can make `git rev-parse` resolve PROJECT or ACTIVE_HOOKS against a different
@@ -108,10 +109,20 @@ typeset -r PI_GIT_XDG_CONFIG_HOME="$HOME/.config"
 
 # Defaults only when unset (protected launcher may have pinned readonly values).
 : "${PI_SANDBOX:=1}"
-: "${PI_EXECUTABLE_KEY:=pi}"
+: "${PI_SANDBOX_RUNTIME:=pi}"
+: "${PI_EXECUTABLE_KEY:=$PI_SANDBOX_RUNTIME}"
 : "${PI_SANDBOX_TRANSPARENT:=0}"
 : "${PI_SANDBOX_INSTALL_DIR:=$HOME/.local/bin}"
 : "${PI_SANDBOX_PROFILE:=$PI_SANDBOX_INSTALL_DIR/pi-sandbox.sb}"
+
+case "$PI_SANDBOX_RUNTIME" in
+  pi|omp) ;;
+  *) emit "unsupported runtime '$PI_SANDBOX_RUNTIME'; expected pi or omp."; exit 1 ;;
+esac
+if [ "$PI_EXECUTABLE_KEY" != "$PI_SANDBOX_RUNTIME" ]; then
+  emit "executable key/runtime mismatch; refusing ambient executable selection."
+  exit 1
+fi
 
 # Protected transparent shim: never honor ambient PI_EXECUTABLE_CONFIG (repo-
 # controlled config selection). Pin to trusted host state under real HOME.
@@ -158,7 +169,7 @@ trusted_executable_prefix() {
 # PROJECT/TMPDIR are resolved later than this function is defined, so callers pass
 # them in when known; absent values are simply not matched.
 executable_under_sandbox_write_root() {
-  local target="$1" home_canon="$2" project="$3" tmpdir="$4"
+  local target="$1" home_canon="$2" project="$3" tmpdir="$4" active_root=""
   [ -n "$target" ] || return 1
 
   case "$target" in
@@ -174,10 +185,22 @@ executable_under_sandbox_write_root() {
   esac
   if [ -n "$home_canon" ]; then
     case "$target" in
-      "$home_canon"/.pi/agent/*|"$home_canon"/.npm/*|"$home_canon"/.cache/* \
+      "$home_canon"/.pi/agent/*|"$home_canon"/.omp/* \
+      |"$home_canon"/.npm/*|"$home_canon"/.cache/* \
       |"$home_canon"/Library/Caches/*) return 0 ;;
     esac
   fi
+  for active_root in \
+    "${PI_AGENT_STATE:-}" \
+    "${OMP_AGENT_STATE:-}" \
+    "${OMP_STATE_ROOT:-}" \
+    "${OMP_BASE_ROOT:-}"
+  do
+    [ -n "$active_root" ] || continue
+    case "$target" in
+      "$active_root"|"$active_root"/*) return 0 ;;
+    esac
+  done
   [ -n "$project" ] && case "$target" in "$project"/*) return 0 ;; esac
   [ -n "$tmpdir" ] && case "$target" in "$tmpdir"/*) return 0 ;; esac
   return 1
@@ -185,6 +208,96 @@ executable_under_sandbox_write_root() {
 
 canonical_path() {
   print -r -- "${1:A}"
+}
+
+resolve_runtime_state() {
+  local unused_root="/private/tmp/pi-sandbox-guard-unused"
+  local profile="" config_name="" candidate="" xdg_var="" xdg_value=""
+
+  PI_AGENT_STATE="$unused_root/pi-agent"
+  OMP_AGENT_STATE="$unused_root/omp-agent"
+  OMP_STATE_ROOT="$unused_root/omp-state"
+  OMP_BASE_ROOT="$unused_root/omp-base"
+
+  if [ "$PI_SANDBOX_RUNTIME" = "pi" ]; then
+    PI_AGENT_STATE="$HOME/.pi/agent"
+    if [ -n "${PI_CODING_AGENT_DIR:-}" ]; then
+      candidate="$(canonical_path "$PI_CODING_AGENT_DIR")"
+      case "$candidate" in
+        "$HOME"/.pi/agent) PI_AGENT_STATE="$candidate" ;;
+        "$HOME"/.pi/agent/*|"$HOME"/.pi)
+          emit "PI_CODING_AGENT_DIR cannot be the default agent root's parent or descendant."
+          return 1
+          ;;
+        "$HOME"/.pi/*) PI_AGENT_STATE="$candidate" ;;
+        *)
+          emit "protected Pi requires PI_CODING_AGENT_DIR to stay under ~/.pi."
+          emit "  Use the default state root, an alternate under ~/.pi, or call the real Pi binary directly."
+          return 1
+          ;;
+      esac
+    fi
+    return 0
+  fi
+
+  config_name="${PI_CONFIG_DIR:-.omp}"
+  case "$config_name" in
+    ""|"."|".."|*/*|*[!A-Za-z0-9._-]*)
+      emit "unsupported PI_CONFIG_DIR '$config_name'; use one direct safe directory name under HOME."
+      return 1
+      ;;
+  esac
+  case "$config_name" in
+    .omp|.omp-*|.omp.*|.omp_*) ;;
+    *)
+      emit "protected OMP requires PI_CONFIG_DIR to be .omp or a .omp-* variant."
+      return 1
+      ;;
+  esac
+  OMP_BASE_ROOT="$(canonical_path "$HOME/$config_name")"
+
+  # OMP uses XDG roots only when the corresponding <root>/omp directory exists.
+  # The shared profile currently has one explicit OMP state root, so refuse an
+  # active split-root layout rather than silently denying some runtime writes.
+  for xdg_var in XDG_DATA_HOME XDG_STATE_HOME XDG_CACHE_HOME; do
+    xdg_value="${(P)xdg_var:-}"
+    if [ -n "$xdg_value" ] && [ -d "$xdg_value/omp" ]; then
+      emit "$xdg_var/omp is active; XDG-split OMP state is not supported by the protected shim."
+      return 1
+    fi
+  done
+
+  if (( ${+OMP_PROFILE} )); then
+    profile="$OMP_PROFILE"
+  else
+    profile="${PI_PROFILE:-}"
+  fi
+  case "$profile" in
+    ""|default) profile="" ;;
+    *[!a-z0-9._-]*|"."|".."|.*)
+      emit "invalid OMP profile '$profile'; expected [a-z0-9][a-z0-9._-]*."
+      return 1
+      ;;
+  esac
+  if [ "${#profile}" -gt 64 ]; then
+    emit "invalid OMP profile '$profile'; maximum length is 64 characters."
+    return 1
+  fi
+  if [ -n "$profile" ]; then
+    OMP_STATE_ROOT="$(canonical_path "$OMP_BASE_ROOT/profiles/$profile")"
+  else
+    OMP_STATE_ROOT="$OMP_BASE_ROOT"
+  fi
+
+  OMP_AGENT_STATE="$OMP_STATE_ROOT/agent"
+  if [ -n "${PI_CODING_AGENT_DIR:-}" ] && [ -z "$profile" ]; then
+    candidate="$(canonical_path "$PI_CODING_AGENT_DIR")"
+    if [ "$candidate" != "$OMP_AGENT_STATE" ]; then
+      emit "protected OMP does not support relocating PI_CODING_AGENT_DIR."
+      emit "  Use an OMP named profile or call the real OMP binary directly."
+      return 1
+    fi
+  fi
 }
 
 resolve_active_hooks() {
@@ -303,7 +416,7 @@ verify_existing_confinement() {
   local ext_probe="$HOME/.pi/agent/extensions/.pi-sandbox-guard-probe.$$"
   local project="${PI_SANDBOX_PROJECT_BOUNDARY:-}"
   local active_hooks="${PI_SANDBOX_ACTIVE_HOOKS_BOUNDARY:-}"
-  local project_probe hooks_probe
+  local project_probe hooks_probe protected_root protected_probe
 
   if [ -z "$project" ] || [ ! -d "$project" ]; then
     emit "existing confinement probe failed: recorded project boundary is unavailable."
@@ -342,6 +455,17 @@ verify_existing_confinement() {
     return 1
   fi
 
+  if [ "$PI_SANDBOX_RUNTIME" = "omp" ]; then
+    for protected_root in "$OMP_AGENT_STATE/extensions" "$OMP_STATE_ROOT/plugins"; do
+      protected_probe="$protected_root/.pi-sandbox-guard-probe.$$"
+      if "$SH_BIN" -c 'mkdir -p "$1" && echo x > "$2"' _ "$protected_root" "$protected_probe" >/dev/null 2>&1; then
+        "$RM_BIN" -f "$protected_probe" 2>/dev/null || true
+        emit "existing confinement probe failed: OMP protected-state write was allowed ($protected_root)."
+        return 1
+      fi
+    done
+  fi
+
   if [ -d "$HOME/.ssh" ] && "$SH_BIN" -c 'ls "$1" >/dev/null' _ "$HOME/.ssh" >/dev/null 2>&1; then
     emit "existing confinement probe failed: ~/.ssh read was allowed."
     return 1
@@ -358,6 +482,11 @@ own_policy_reentry() {
   local expected="$1"
   [ "$PI_SANDBOX_TRANSPARENT" = "1" ] || return 1
   [ -n "${PI_SANDBOX_SHIM_ACTIVE:-}" ] || return 1
+  [ "${PI_SANDBOX_RUNTIME_ACTIVE:-}" = "$PI_SANDBOX_RUNTIME" ] || return 1
+  case "$PI_SANDBOX_RUNTIME" in
+    pi) [ "${PI_SANDBOX_AGENT_STATE_BOUNDARY:-}" = "$PI_AGENT_STATE" ] || return 1 ;;
+    omp) [ "${PI_SANDBOX_AGENT_STATE_BOUNDARY:-}" = "$OMP_AGENT_STATE" ] || return 1 ;;
+  esac
   [ -n "$expected" ] || return 1
   [ -n "${PI_SANDBOX_PROFILE_DIGEST:-}" ] || return 1
   [ "$PI_SANDBOX_PROFILE_DIGEST" = "$expected" ] || return 1
@@ -483,7 +612,7 @@ build_launch_vector() {
   # Only prepend the interpreter for something that actually needs one: a `node`
   # shebang. Prepending it to a native binary would try to parse ELF/Mach-O as JS.
   local first_line=""
-  first_line="$(head -c 128 "$target" 2>/dev/null | head -1 || true)"
+  first_line="$("$HEAD_BIN" -c 128 "$target" 2>/dev/null | "$HEAD_BIN" -1 || true)"
   case "$first_line" in
     '#!'*[[:space:]]node|'#!'*[[:space:]]node[[:space:]]*|'#!'*/node|'#!'*/node[[:space:]]*)
       PI_LAUNCH_VECTOR=("$interpreter" "$target")
@@ -491,104 +620,91 @@ build_launch_vector() {
   esac
 }
 
-resolve_pi_executable() {
+resolve_agent_executable() {
   local configured="" resolved="" shim_canon="" target_canon=""
   local configured_source="" bound="" interpreter="" bound_interpreter=""
+  local runtime_label="" ambient_name=""
 
-  # SOURCE PRECEDENCE, and why each source gets the rules it gets:
-  #   1. PI_EXECUTABLE (env)  — AMBIENT. A project .envrc/Makefile/npm script can set
-  #      it, so it keeps the trusted-prefix restriction.
-  #   2. pi= in the pinned config — OPERATOR-RECORDED. Exempt from path shape.
-  #   3. auto-resolution from the sanitized PATH — AMBIENT-ish (PATH is sanitized, but
-  #      no operator named the result), so it keeps the trusted-prefix restriction.
-  #
-  # The config key is read with a FIXED name in transparent mode. PI_EXECUTABLE_KEY is
-  # caller-settable (launchers/pi defaults it to ${0:t}), so honoring it here while the
-  # config also holds a node= record would let a wrapper export PI_EXECUTABLE_KEY=node
-  # and launch the interpreter AS Pi — skipping Pi's own tool/extension layer entirely.
-  # Interpreter records therefore live under a key the executable lookup cannot select.
-  if [ -n "${PI_EXECUTABLE:-}" ]; then
-    configured="$PI_EXECUTABLE"
+  [ "$PI_SANDBOX_TRANSPARENT" = "1" ] || {
+    emit "direct preamble use is unsupported; launch through the protected pi/omp shim."
+    exit 1
+  }
+
+  case "$PI_SANDBOX_RUNTIME" in
+    pi)
+      runtime_label="Pi"
+      ambient_name="PI_EXECUTABLE"
+      configured="${PI_EXECUTABLE:-}"
+      ;;
+    omp)
+      runtime_label="OMP"
+      ambient_name="OMP_EXECUTABLE"
+      configured="${OMP_EXECUTABLE:-}"
+      ;;
+  esac
+
+  if [ -n "$configured" ]; then
     configured_source="env"
-  elif [ "$PI_SANDBOX_TRANSPARENT" = "1" ]; then
-    bound="$(config_value_for_key "pi" || true)"
-    [ -n "$bound" ] && configured_source="bound"
   else
-    configured="$(config_value_for_key "$PI_EXECUTABLE_KEY" || true)"
-    if [ -z "$configured" ] && [ "$PI_EXECUTABLE_KEY" != "pi" ]; then
-      configured="$(config_value_for_key "pi" || true)"
-    fi
-    [ -n "$configured" ] && configured_source="config"
+    bound="$(config_value_for_key "$PI_SANDBOX_RUNTIME" || true)"
+    [ -n "$bound" ] && configured_source="bound"
   fi
 
-  if [ "$PI_SANDBOX_TRANSPARENT" = "1" ]; then
-    case "$configured_source" in
-      env)
-        resolved="$(resolve_configured_executable "$configured" || true)"
-        if [ -z "$resolved" ]; then
-          emit "PI_EXECUTABLE='$configured' is not an accepted ambient override."
-          emit "  Ambient overrides must sit in a fixed trusted prefix. To use an"
-          emit "  install elsewhere, record it once from the repo checkout:"
-          emit "    npm run bind -- --pi <abs-path>"
-          exit 1
-        fi
-        ;;
-      bound)
-        resolved="$(resolve_bound_executable "$bound" || true)"
-        if [ -z "$resolved" ]; then
-          emit "recorded Pi binding is no longer usable: '$bound'"
-          emit "  It must be an absolute path to an existing executable, not this shim,"
-          emit "  and not inside a sandbox-writable root. Re-record it:"
-          emit "  npm run bind -- --detect   (or -- --pi <abs-path>), from the repo checkout"
-          exit 1
-        fi
-        ;;
-      *)
-        resolved="$(resolve_command_outside_shim_dir "pi" || true)"
-        if [ -z "$resolved" ]; then
-          emit "cannot auto-resolve the real Pi executable outside the shim path."
-          emit "  Auto-resolution only searches fixed trusted prefixes, which do not"
-          emit "  cover Homebrew's Cellar, npm user prefixes, nvm/fnm/volta/asdf/mise,"
-          emit "  pnpm/bun/yarn globals, or Nix. Record your install once:"
-          emit "    npm run bind -- --detect      (from the repo checkout)"
-          exit 1
-        fi
-        ;;
-    esac
+  case "$configured_source" in
+    env)
+      resolved="$(resolve_configured_executable "$configured" || true)"
+      if [ -z "$resolved" ]; then
+        emit "$ambient_name='$configured' is not an accepted ambient override."
+        emit "  Record non-standard installs with: npm run bind"
+        exit 1
+      fi
+      ;;
+    bound)
+      resolved="$(resolve_bound_executable "$bound" || true)"
+      if [ -z "$resolved" ]; then
+        emit "recorded $runtime_label binding is no longer usable: '$bound'"
+        emit "  Re-record it from the repo checkout: npm run bind"
+        exit 1
+      fi
+      ;;
+    *)
+      resolved="$(resolve_command_outside_shim_dir "$PI_SANDBOX_RUNTIME" || true)"
+      if [ -z "$resolved" ]; then
+        emit "cannot auto-resolve the real $runtime_label executable outside the shim path."
+        emit "  Record the install once from the repo checkout: npm run bind"
+        exit 1
+      fi
+      ;;
+  esac
 
-    [ -n "${PI_SANDBOX_SHIM_PATH:-}" ] && shim_canon="$(canonical_path "$PI_SANDBOX_SHIM_PATH")"
-    target_canon="$(canonical_path "$resolved")"
-    if [ -n "$shim_canon" ] && [ "$target_canon" = "$shim_canon" ]; then
-      emit "configured Pi executable resolves to this shim ($target_canon); refusing recursive launch."; exit 1
-    fi
-    if [ ! -x "$target_canon" ] || [ -d "$target_canon" ]; then
-      emit "resolved Pi executable is not executable: $target_canon"; exit 1
-    fi
+  [ -n "${PI_SANDBOX_SHIM_PATH:-}" ] && shim_canon="$(canonical_path "$PI_SANDBOX_SHIM_PATH")"
+  target_canon="$(canonical_path "$resolved")"
+  validate_executable_target "$target_canon" || {
+    emit "resolved $runtime_label executable is not an accepted target: $target_canon"
+    exit 1
+  }
+  if [ -n "$shim_canon" ] && [ "$target_canon" = "$shim_canon" ]; then
+    emit "configured $runtime_label executable resolves to this shim; refusing recursive launch."
+    exit 1
+  fi
 
-    # Interpreter record: read from a key the executable lookup cannot reach.
+  # Pi may be a Node shebang entrypoint. OMP's official release is a native
+  # compiled Bun executable and must never be prepended with Node.
+  if [ "$PI_SANDBOX_RUNTIME" = "pi" ]; then
     bound_interpreter="$(config_value_for_key "node" || true)"
     if [ -n "$bound_interpreter" ]; then
       interpreter="$(resolve_bound_interpreter "$bound_interpreter" || true)"
-      if [ -z "$interpreter" ]; then
-        emit "recorded interpreter is no longer usable: '$bound_interpreter'"
-        emit "  Re-record it from the repo checkout:"
-        # Both operands, deliberately: this branch is reached only when the
-        # recorded interpreter is already unusable, and `--pi` alone re-derives
-        # node by detection — which is what just failed.
-        emit "    npm run bind -- --detect   (or -- --pi <abs-path> --node <abs-path>)"
+      [ -n "$interpreter" ] || {
+        emit "recorded Node interpreter is no longer usable: '$bound_interpreter'"
+        emit "  Re-record it from the repo checkout: npm run bind"
         exit 1
-      fi
+      }
     fi
-
-    PI_EXECUTABLE="$target_canon"
-    PI_INTERPRETER="$interpreter"
-    build_launch_vector "$target_canon" "$interpreter"
-    return 0
   fi
 
-  PI_EXECUTABLE="${configured:-pi}"
-  PI_INTERPRETER=""
-  build_launch_vector "${configured:-pi}" ""
+  PI_EXECUTABLE="$target_canon"
+  PI_INTERPRETER="$interpreter"
+  build_launch_vector "$target_canon" "$interpreter"
 }
 
 # Canonicalize TMPDIR and refuse values that would widen Seatbelt writes.
@@ -689,7 +805,8 @@ if [ "${PI_SANDBOX_SELFTEST:-}" = "resolve" ]; then
   fi
   # Transparent resolution is the protected-shim path under test.
   PI_SANDBOX_TRANSPARENT=1
-  resolve_pi_executable
+  resolve_runtime_state || exit 1
+  resolve_agent_executable
   # Default output stays the resolved executable so existing callers are unaffected.
   # PI_SANDBOX_SELFTEST_VECTOR=1 prints the full launch vector, one element per line,
   # which is the only way to observe interpreter prepending without launching Pi.
@@ -699,6 +816,17 @@ if [ "${PI_SANDBOX_SELFTEST:-}" = "resolve" ]; then
     print -r -- "$PI_EXECUTABLE"
   fi
   exit 0
+fi
+
+if [ "${PI_SANDBOX_SELFTEST:-}" = "write-root" ]; then
+  resolve_runtime_state || exit 1
+  if executable_under_sandbox_write_root \
+       "${PI_SANDBOX_SELFTEST_TARGET:-}" "$HOME" "" ""; then
+    print -r -- "writable"
+    exit 0
+  fi
+  print -r -- "protected"
+  exit 1
 fi
 
 if [ "${PI_SANDBOX_SELFTEST:-}" = "active-hooks" ]; then
@@ -711,7 +839,8 @@ if [ "${PI_SANDBOX_SELFTEST:-}" = "active-hooks" ]; then
   exit 0
 fi
 
-resolve_pi_executable
+resolve_runtime_state || exit 1
+resolve_agent_executable
 
 # Minimal, non-breaking resource guard. NO -u (process cap) — it broke fork() at
 # low values. Core dumps off; file-size ~2GB. CPU cap is opt-in only (PI_RLIMIT_CPU).
@@ -897,16 +1026,27 @@ for _pi_launch_element in "${PI_LAUNCH_VECTOR[@]}"; do
 done
 unset _pi_launch_element
 
-emit "OS sandbox ON. Project [$PROJECT_VIA]: $PROJECT"
+emit "OS sandbox ON. Runtime [$PI_SANDBOX_RUNTIME]. Project [$PROJECT_VIA]: $PROJECT"
 emit "  active Git hooks denied: $ACTIVE_HOOKS"
-emit "  also writable: $TMPDIR_CANON, /private/tmp, ~/.pi/agent (minus config/auth/trust/extensions), ~/.npm, ~/.cache, ~/Library/Caches"
+if [ "$PI_SANDBOX_RUNTIME" = "pi" ]; then
+  emit "  Pi state: $PI_AGENT_STATE (config/auth/extensions protected)"
+else
+  emit "  OMP state: $OMP_STATE_ROOT (positive runtime allowlist; plugins/config/extensions protected)"
+fi
+emit "  also writable: $TMPDIR_CANON, /private/tmp, ~/.npm, ~/.cache, ~/Library/Caches"
 
 # Record the applied profile and behavioral boundaries for nested re-entry.
 # These values are not secrets; nested verification probes their enforcement.
 PI_SANDBOX_PROFILE_DIGEST="$EXPECTED_PROFILE_DIGEST"
 PI_SANDBOX_PROJECT_BOUNDARY="$PROJECT"
 PI_SANDBOX_ACTIVE_HOOKS_BOUNDARY="$ACTIVE_HOOKS"
-export PI_SANDBOX_PROFILE_DIGEST PI_SANDBOX_PROJECT_BOUNDARY PI_SANDBOX_ACTIVE_HOOKS_BOUNDARY
+if [ "$PI_SANDBOX_RUNTIME" = "pi" ]; then
+  PI_SANDBOX_AGENT_STATE_BOUNDARY="$PI_AGENT_STATE"
+else
+  PI_SANDBOX_AGENT_STATE_BOUNDARY="$OMP_AGENT_STATE"
+fi
+export PI_SANDBOX_PROFILE_DIGEST PI_SANDBOX_PROJECT_BOUNDARY
+export PI_SANDBOX_ACTIVE_HOOKS_BOUNDARY PI_SANDBOX_AGENT_STATE_BOUNDARY
 
 PI_SANDBOX_CMD=(
   "$SANDBOX_EXEC"
@@ -914,5 +1054,9 @@ PI_SANDBOX_CMD=(
   -D "HOME=$HOME"
   -D "TMPDIR=$TMPDIR_CANON"
   -D "ACTIVE_HOOKS=$ACTIVE_HOOKS"
+  -D "PI_AGENT_STATE=$PI_AGENT_STATE"
+  -D "OMP_AGENT_STATE=$OMP_AGENT_STATE"
+  -D "OMP_STATE_ROOT=$OMP_STATE_ROOT"
+  -D "OMP_BASE_ROOT=$OMP_BASE_ROOT"
   -f "$PROFILE"
 )

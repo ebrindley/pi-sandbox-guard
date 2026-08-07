@@ -72,7 +72,11 @@ PROJ="$FAKEHOME/My Project"
 ACTIVE_HOOKS="$PROJ/.git/hooks"
 mkdir -p "$PROJ" "$PROJ/.git/hooks" "$PROJ/.githooks" \
   "$PROJ/.git/modules/sub/hooks" "$PROJ/.git/modules/outer/modules/inner/hooks" \
-  "$FAKEHOME/.pi/agent/extensions" "$FAKEHOME/.ssh" "$FAKEHOME/.config/git" "$FAKETMP"
+  "$FAKEHOME/.pi/agent/extensions" "$FAKEHOME/.ssh" "$FAKEHOME/.config/git" "$FAKETMP" \
+  "$FAKEHOME/.omp/agent/extensions" "$FAKEHOME/.omp/agent/hooks" \
+  "$FAKEHOME/.omp/agent/tools" "$FAKEHOME/.omp/plugins" "$FAKEHOME/.omp/logs" \
+  "$FAKEHOME/.omp/wt/repo/.git/hooks" "$FAKEHOME/.omp/wt/repo/src/hooks" \
+  "$FAKEHOME/.omp/wt/bare.git/hooks" "$FAKEHOME/.omp/wt/separate/gitdir/hooks"
 printf 'SECRET\n' > "$PROJ/.env"
 printf 'cert\n'   > "$PROJ/server.pem"          # project "secret-looking" file: must stay READABLE
 printf 'cfg\n'    > "$FAKEHOME/.pi/agent/settings.json"
@@ -88,9 +92,40 @@ printf 'k\n'      > "$FAKEHOME/.ssh/id_probe"
 printf 'creds\n'  > "$FAKEHOME/.netrc"
 printf 'git-creds\n' > "$FAKEHOME/.config/git/credentials"
 printf 'log\n'    > "$FAKEHOME/.pi/agent/security-events.log"
+printf 'omp-config\n' > "$FAKEHOME/.omp/agent/config.yml"
+printf 'omp-extension\n' > "$FAKEHOME/.omp/agent/extensions/guard.ts"
+printf 'omp-hook\n' > "$FAKEHOME/.omp/agent/hooks/pre-tool.sh"
+printf 'omp-tool\n' > "$FAKEHOME/.omp/agent/tools/custom.ts"
+printf 'omp-plugin\n' > "$FAKEHOME/.omp/plugins/package.json"
 
 # Always pass ACTIVE_HOOKS (required profile param; the launcher supplies it at runtime).
-sb() { "$SBX" -D PROJECT="$PROJ" -D HOME="$FAKEHOME" -D TMPDIR="$FAKETMP" -D ACTIVE_HOOKS="$ACTIVE_HOOKS" -f "$PROFILE_SRC" "$@"; }
+sb() {
+  "$SBX" -D PROJECT="$PROJ" -D HOME="$FAKEHOME" -D TMPDIR="$FAKETMP" \
+    -D ACTIVE_HOOKS="$ACTIVE_HOOKS" \
+    -D PI_AGENT_STATE="$FAKEHOME/.pi/agent" \
+    -D OMP_AGENT_STATE="$FAKEHOME/.unused/omp-agent" \
+    -D OMP_STATE_ROOT="$FAKEHOME/.unused/omp-state" \
+    -D OMP_BASE_ROOT="$FAKEHOME/.unused/omp-base" \
+    -f "$PROFILE_SRC" "$@"
+}
+sb_omp() {
+  "$SBX" -D PROJECT="$PROJ" -D HOME="$FAKEHOME" -D TMPDIR="$FAKETMP" \
+    -D ACTIVE_HOOKS="$ACTIVE_HOOKS" \
+    -D PI_AGENT_STATE="$FAKEHOME/.unused/pi-agent" \
+    -D OMP_AGENT_STATE="$FAKEHOME/.omp/agent" \
+    -D OMP_STATE_ROOT="$FAKEHOME/.omp" \
+    -D OMP_BASE_ROOT="$FAKEHOME/.omp" \
+    -f "$PROFILE_SRC" "$@"
+}
+sb_pi_relocated() {
+  "$SBX" -D PROJECT="$PROJ" -D HOME="$FAKEHOME" -D TMPDIR="$FAKETMP" \
+    -D ACTIVE_HOOKS="$ACTIVE_HOOKS" \
+    -D PI_AGENT_STATE="$FAKEHOME/.pi/alternate-agent" \
+    -D OMP_AGENT_STATE="$FAKEHOME/.unused/omp-agent" \
+    -D OMP_STATE_ROOT="$FAKEHOME/.unused/omp-state" \
+    -D OMP_BASE_ROOT="$FAKEHOME/.unused/omp-base" \
+    -f "$PROFILE_SRC" "$@"
+}
 
 sb true || die "profile failed to apply (missing ACTIVE_HOOKS param?)"
 
@@ -215,6 +250,12 @@ if ! sb /bin/sh -c "echo x >> '$FAKEHOME/.pi/agent/run-history.json'" 2>/dev/nul
   die "OVER-DENY: ~/.pi/agent/run-history.json write DENIED"; fi
 if sb /bin/sh -c "touch '$FAKEHOME/.pi/agent/extensions/tamper'" 2>/dev/null; then
   die "SECURITY: ~/.pi/agent/extensions write ALLOWED (guard could be disabled)"; fi
+# Relocating Pi operational state must not unprotect the canonical shared extension.
+sb_pi_relocated /bin/sh -c "mkdir -p '$FAKEHOME/.pi/alternate-agent/sessions' && echo s > '$FAKEHOME/.pi/alternate-agent/sessions/x'" \
+  || die "relocated Pi session state write denied"
+if sb_pi_relocated /bin/sh -c "touch '$FAKEHOME/.pi/agent/extensions/relocation-tamper'" 2>/dev/null; then
+  die "SECURITY: relocated Pi state unprotected the canonical shared extension"
+fi
 # 4. secret reads denied (~/.ssh, project .env) but project source/cert READABLE
 if sb /bin/sh -c "cat '$FAKEHOME/.ssh/id_probe'" >/dev/null 2>&1; then
   die "SECURITY: ~/.ssh read ALLOWED"; fi
@@ -236,8 +277,47 @@ if sb /bin/sh -c "cat '$FAKEHOME/.pi/agent/security-events.log'" >/dev/null 2>&1
 sb /bin/sh -c "echo probe >> '$FAKEHOME/.pi/agent/security-events.log'" \
   || die "security-events.log append DENIED (analyzer logging would break)"
 
+# 6. OMP receives a positive runtime allowlist, not a blanket ~/.omp write grant.
+sb_omp /bin/sh -c "mkdir -p '$FAKEHOME/.omp/agent/sessions' && echo s > '$FAKEHOME/.omp/agent/sessions/x'" \
+  || die "OMP sessions write denied"
+sb_omp /bin/sh -c "echo db > '$FAKEHOME/.omp/agent/agent.db'" \
+  || die "OMP mixed runtime database write denied"
+sb_omp /bin/sh -c "echo journal > '$FAKEHOME/.omp/agent/agent.db-journal'" \
+  || die "OMP initial SQLite rollback journal write denied"
+sb_omp /bin/sh -c "echo log > '$FAKEHOME/.omp/logs/probe.log'" \
+  || die "OMP logs write denied"
+sb_omp /bin/sh -c "mkdir -p '$FAKEHOME/.omp/wt' && echo w > '$FAKEHOME/.omp/wt/probe'" \
+  || die "OMP worktree state write denied"
+sb_omp /bin/sh -c "echo x > '$FAKEHOME/.omp/wt/repo/src/hooks/useFoo.ts'" \
+  || die "OMP ordinary source directory named hooks is over-denied"
+if sb_omp /bin/sh -c "echo x > '$FAKEHOME/.omp/wt/repo/.git/hooks/pre-commit'" 2>/dev/null; then
+  die "SECURITY: OMP managed-worktree hook write ALLOWED"
+fi
+if sb_omp /bin/sh -c "echo x > '$FAKEHOME/.omp/wt/bare.git/hooks/pre-commit'" 2>/dev/null; then
+  die "SECURITY: OMP bare-repository hook write ALLOWED"
+fi
+if sb_omp /bin/sh -c "echo x > '$FAKEHOME/.omp/wt/separate/gitdir/hooks/pre-commit'" 2>/dev/null; then
+  die "SECURITY: OMP separate-git-dir hook write ALLOWED"
+fi
+sb_omp /bin/sh -c "echo x > '$FAKEHOME/.omp/wt/repo/.git/hooks/pre-commit.sample'" \
+  || die "OMP managed-worktree inert hook sample write denied"
+sb_omp /bin/sh -c "echo id > '$FAKEHOME/.omp/install-id'" \
+  || die "OMP install-id write denied"
+sb_omp /bin/sh -c "echo probe >> '$FAKEHOME/.pi/agent/security-events.log'" \
+  || die "shared analyzer log append denied under OMP"
+for protected in \
+  "$FAKEHOME/.omp/agent/config.yml" \
+  "$FAKEHOME/.omp/agent/extensions/guard.ts" \
+  "$FAKEHOME/.omp/agent/hooks/pre-tool.sh" \
+  "$FAKEHOME/.omp/agent/tools/custom.ts" \
+  "$FAKEHOME/.omp/plugins/package.json"
+do
+  if sb_omp /bin/sh -c "echo tamper >> '$protected'" 2>/dev/null; then
+    die "SECURITY: OMP executable/config surface write ALLOWED: $protected"
+  fi
+done
 rm -rf "$PROBEROOT" 2>/dev/null || true
 trap - EXIT
 say "[test-sandbox-profile] profile OK: in-project write + project-file read allowed; default/.githooks/"
 say "[test-sandbox-profile]   submodule/out-of-project ACTIVE_HOOKS, outside-project, ~/.pi config/auth/"
-say "[test-sandbox-profile]   extensions writes, and secret reads all denied; *.sample + .git/config preserved."
+say "[test-sandbox-profile]   Pi/OMP extension/config writes and secret reads denied; OMP runtime state preserved."

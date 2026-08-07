@@ -1,8 +1,8 @@
 # Security Policy
 
 Please report suspected bypasses or security issues privately before opening a
-public issue. Include the command, launcher, operating system version, Pi
-version, and whether the macOS Seatbelt layer was active.
+public issue. Include the command, launcher, operating system version, runtime
+(`pi` or `omp`) and version, and whether the macOS Seatbelt layer was active.
 
 Private reporting channel: open a
 [private security advisory](https://github.com/ebrindley/pi-sandbox-guard/security/advisories/new).
@@ -22,7 +22,8 @@ belongs in an advisory.
 
 ## What this project is
 
-This project is a **macOS Seatbelt write-containment boundary** around Pi, plus a
+This project is a **macOS Seatbelt write-containment boundary** around Pi and
+Oh My Pi (OMP), plus a
 **best-effort, UX-oriented bash analyzer** that blocks obviously destructive
 commands with clear messages. It is **not** a VM, network sandbox, process
 isolator, or general confidentiality boundary.
@@ -41,34 +42,37 @@ The following are **outside current scope** by design, not unfinished checkboxes
 | Concern | Status |
 |---|---|
 | General confidentiality of project data / agent context | Out of scope |
-| Provider-token secrecy from the Pi process and tool children | Out of scope (see below) |
+| Provider-token secrecy from the agent process and tool children | Out of scope (see below) |
 | Outbound network restriction | Out of scope (network remains open) |
 | Process availability / fork bombs / resource exhaustion caps | Out of scope (optional CPU ulimit only) |
 | Integrity of the current working tree under `PROJECT` | Out of scope (PROJECT is intentionally writable) |
 | Integrity of the Node interpreter itself, on filter-only installs | Out of scope (see below) |
 
-**The Node interpreter is trusted, and that trust is not re-verified.** The
-analyzer canonicalizes paths using `process.execPath`, the absolute path of the
-Node binary already running the guard. Pinning it absolutely prevents *shadowing*
+**The Node interpreter is trusted; its contents are not re-verified.** A
+deployed analyzer canonicalizes paths using the absolute Node path written to
+its `.guard-node` binding during deployment. Source-tree use falls back to
+`process.execPath`. This distinction is required because compiled OMP reports
+its application binary as `process.execPath`. Pinning Node absolutely prevents *shadowing*
 (no PATH entry or repo-local `node` can win a lookup, because there is no lookup),
 but it does not make the file immutable. If Node lives somewhere the agent can
 write, that file can be replaced after startup and later canonicalizations would
 run the replacement, which could report attacker-chosen paths and cause a
 destructive command to be misclassified as safe.
 
-Seatbelt narrows this but does not by itself close it. `PROJECT` is not the only
+The protected launcher rejects a pinned Node path under its active `PROJECT`,
+`TMPDIR`, Pi/OMP state, or the fixed writable cache roots. Filter-only use has
+no launcher check. `PROJECT` is not the only
 writable root: the profile also allows writes under `TMPDIR`, `/private/tmp`,
-`~/.pi/agent`, `~/.npm`, `~/.cache`, and `~/Library/Caches`. A Node installed
+active Pi/OMP runtime state, `~/.npm`, `~/.cache`, and `~/Library/Caches`. A Node installed
 under any of those, such as a version manager or corepack shim in `~/.cache`,
 remains replaceable by the sandboxed agent.
 
 **Two conditions, and which one applies depends on your deployment:**
 
-- *With Seatbelt*: Node must live outside *every* writable root listed in
-  `sandbox/pi-sandbox.sb`. Location is what contains the swap here, because the
-  profile is what denies the write. A user-cache or project-local install fails
-  this; a Homebrew install under `/opt/homebrew` passes, since that is outside
-  every writable root.
+- *With the protected launcher*: Node must live outside every active writable
+  root. Deployment rejects fixed unsafe roots and launch re-checks dynamic roots.
+  A user-cache or project-local install fails this; a Homebrew install under
+  `/opt/homebrew` passes.
 - *Filter-only (no Seatbelt)*: location buys nothing, because nothing is denying
   writes. Only **ownership** helps: the Node binary and every directory on its
   path must not be writable by the account the agent runs as. macOS ships no
@@ -77,15 +81,21 @@ remains replaceable by the sandboxed agent.
   does **not** satisfy this. Install Node to a root-owned location, or run under
   Seatbelt.
 
-Applying the sandbox profile is not on its own a mitigation for this concern, and
-neither is an absolute path.
+Applying the sandbox profile without the protected launcher is not on its own a
+mitigation for this concern, and neither is an absolute path.
 
 Re-hashing or re-resolving the interpreter per invocation would not close it
 either: the check and the exec remain distinct moments.
 
+**OMP mixed database limitation.** OMP stores operational data and credentials
+together in `agent.db`. Normal OMP operation requires that database and its
+SQLite sidecars remain writable, so this guard cannot provide Pi-style
+file-level auth tamper resistance for OMP. OMP plugins, extensions, hooks, tools,
+prompts, rules, and file-based configuration remain read-only in protected mode.
+
 **Provider tokens and per-tool secret isolation** cannot be solved by denying
-`~/.pi/agent/auth.json` writes alone. Pi (and tool children) typically need
-provider credentials in-process. True per-tool isolation requires **Pi/upstream
+`~/.pi/agent/auth.json` writes alone. Agents and tool children typically need
+provider credentials in-process. True per-tool isolation requires **upstream
 architecture** (e.g. a credential broker) or a **stronger isolation boundary**
 (VM/container with separate identity). Documenting a file deny as "tokens are
 safe" would be false confidence.
