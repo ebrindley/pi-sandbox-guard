@@ -19,6 +19,10 @@
 ;;                 (resolved core.hooksPath, or PROJECT/.git/hooks by default;
 ;;                 also the shared hooks dir for linked worktrees). The launcher
 ;;                 supplies this; the profile denies the whole subtree.
+;;   PI_AGENT_STATE active Pi agent directory, or an inert unused path for OMP
+;;   OMP_AGENT_STATE active OMP agent directory, or an inert unused path for Pi
+;;   OMP_STATE_ROOT active OMP profile/config root, or an inert path for Pi
+;;   OMP_BASE_ROOT base OMP config root (install-id), or an inert path for Pi
 ;;
 ;; Reviewed decisions:
 ;;  - secret-read denies are scoped to specific HOME locations ONLY, never blanket
@@ -40,8 +44,64 @@
   (subpath (param "PROJECT"))                                   ; the project/repo (Pi may edit it)
   (subpath (param "TMPDIR"))                                    ; canonical per-user temp
   (subpath "/private/tmp")                                      ; /tmp -> /private/tmp
-  (subpath (string-append (param "HOME") "/.pi/agent"))         ; Pi runtime: sessions, locks,
-                                                                ; run-history, trust.json (see deny below)
+  (subpath (param "PI_AGENT_STATE"))                            ; Pi runtime state (see re-denies)
+  ;; OMP 17.2.10 uses mixed config/runtime roots. Keep the executable and
+  ;; steering surfaces read-only by allowing only observed runtime paths.
+  (literal (param "OMP_BASE_ROOT"))
+  (literal (string-append (param "OMP_BASE_ROOT") "/profiles"))
+  (literal (param "OMP_STATE_ROOT"))
+  (literal (param "OMP_AGENT_STATE"))
+  (subpath (string-append (param "OMP_AGENT_STATE") "/sessions"))
+  (subpath (string-append (param "OMP_AGENT_STATE") "/blobs"))
+  (subpath (string-append (param "OMP_AGENT_STATE") "/cache"))
+  (subpath (string-append (param "OMP_AGENT_STATE") "/memories"))
+  (subpath (string-append (param "OMP_AGENT_STATE") "/terminal-sessions"))
+  (subpath (string-append (param "OMP_AGENT_STATE") "/python-gateway"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/agent.db"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/agent.db-wal"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/agent.db-shm"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/agent.db-journal"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/history.db"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/history.db-wal"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/history.db-shm"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/history.db-journal"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/models.db"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/models.db-wal"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/models.db-shm"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/models.db-journal"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/last-changelog-version"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/secret-placeholder.key"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/omp-debug.log"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/omp-crash.log"))
+  (subpath (string-append (param "OMP_STATE_ROOT") "/logs"))
+  (subpath (string-append (param "OMP_STATE_ROOT") "/reports"))
+  (subpath (string-append (param "OMP_STATE_ROOT") "/wt"))
+  (subpath (string-append (param "OMP_STATE_ROOT") "/remote"))
+  (subpath (string-append (param "OMP_STATE_ROOT") "/ssh-control"))
+  (subpath (string-append (param "OMP_STATE_ROOT") "/remote-host"))
+  (subpath (string-append (param "OMP_STATE_ROOT") "/python-env"))
+  (subpath (string-append (param "OMP_STATE_ROOT") "/puppeteer"))
+  (subpath (string-append (param "OMP_STATE_ROOT") "/browser-relay"))
+  (subpath (string-append (param "OMP_STATE_ROOT") "/webcache"))
+  (subpath (string-append (param "OMP_STATE_ROOT") "/cache"))
+  (subpath (string-append (param "OMP_STATE_ROOT") "/natives"))
+  (subpath (string-append (param "OMP_STATE_ROOT") "/autoresearch"))
+  (subpath (string-append (param "OMP_STATE_ROOT") "/security"))
+  (subpath (string-append (param "OMP_STATE_ROOT") "/run"))
+  (subpath (string-append (param "OMP_STATE_ROOT") "/collab"))
+  (literal (string-append (param "OMP_STATE_ROOT") "/stats.db"))
+  (literal (string-append (param "OMP_STATE_ROOT") "/stats.db-wal"))
+  (literal (string-append (param "OMP_STATE_ROOT") "/stats.db-shm"))
+  (literal (string-append (param "OMP_STATE_ROOT") "/stats.db-journal"))
+  (literal (string-append (param "OMP_STATE_ROOT") "/autoqa.db"))
+  (literal (string-append (param "OMP_STATE_ROOT") "/autoqa.db-wal"))
+  (literal (string-append (param "OMP_STATE_ROOT") "/autoqa.db-shm"))
+  (literal (string-append (param "OMP_STATE_ROOT") "/autoqa.db-journal"))
+  (literal (string-append (param "OMP_STATE_ROOT") "/gpu_cache.json"))
+  (literal (string-append (param "OMP_STATE_ROOT") "/snapcompact-savings.jsonl"))
+  (literal (string-append (param "OMP_BASE_ROOT") "/install-id"))
+  ;; The shared analyzer keeps one log independent of the active runtime.
+  (literal (string-append (param "HOME") "/.pi/agent/security-events.log"))
   (subpath (string-append (param "HOME") "/.npm"))              ; npm cache
   (subpath (string-append (param "HOME") "/.cache"))            ; generic tool cache (pip/uv/etc.)
   (subpath (string-append (param "HOME") "/Library/Caches"))    ; macOS tool caches (pip/uv/playwright)
@@ -83,10 +143,48 @@
   (require-all
     (subpath (string-append (param "PROJECT") "/.git/modules"))
     (regex #"/hooks(/|$)"))
+  (require-all
+    (subpath (string-append (param "OMP_STATE_ROOT") "/wt"))
+    (regex #"/hooks(/|$)"))
+  (subpath (string-append (param "PI_AGENT_STATE") "/extensions"))
+  (literal (string-append (param "PI_AGENT_STATE") "/settings.json"))
+  (literal (string-append (param "PI_AGENT_STATE") "/auth.json"))
+  (literal (string-append (param "PI_AGENT_STATE") "/trust.json"))
+  ;; The shared extension remains at the canonical Pi path even when Pi runtime
+  ;; state is relocated. Keep these denies pinned as well as state-relative.
   (subpath (string-append (param "HOME") "/.pi/agent/extensions"))
   (literal (string-append (param "HOME") "/.pi/agent/settings.json"))
   (literal (string-append (param "HOME") "/.pi/agent/auth.json"))
   (literal (string-append (param "HOME") "/.pi/agent/trust.json"))
+  ;; OMP agent.db is mixed operational/auth storage and must stay writable for
+  ;; normal runtime use. File-backed executable and steering surfaces do not.
+  (subpath (string-append (param "OMP_AGENT_STATE") "/extensions"))
+  (subpath (string-append (param "OMP_AGENT_STATE") "/hooks"))
+  (subpath (string-append (param "OMP_AGENT_STATE") "/tools"))
+  (subpath (string-append (param "OMP_AGENT_STATE") "/commands"))
+  (subpath (string-append (param "OMP_AGENT_STATE") "/skills"))
+  (subpath (string-append (param "OMP_AGENT_STATE") "/agents"))
+  (subpath (string-append (param "OMP_AGENT_STATE") "/prompts"))
+  (subpath (string-append (param "OMP_AGENT_STATE") "/rules"))
+  (subpath (string-append (param "OMP_AGENT_STATE") "/instructions"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/config.yml"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/config.yaml"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/settings.json"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/models.yml"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/mcp.json"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/.mcp.json"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/ssh.json"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/.env"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/SYSTEM.md"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/APPEND_SYSTEM.md"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/AGENTS.md"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/RULES.md"))
+  (literal (string-append (param "OMP_AGENT_STATE") "/TITLE_SYSTEM.md"))
+  (subpath (string-append (param "OMP_STATE_ROOT") "/plugins"))
+  (literal (string-append (param "OMP_STATE_ROOT") "/marketplaces.json"))
+  (literal (string-append (param "OMP_STATE_ROOT") "/auth-broker.token"))
+  (literal (string-append (param "OMP_STATE_ROOT") "/auth-gateway.token"))
+  (literal (string-append (param "OMP_STATE_ROOT") "/.env"))
   ;; System-prompt files under ~/.pi/agent (installed for --append-system-prompt).
   ;; An agent that can rewrite its own appended system prompt has a persistent
   ;; steering-injection vector that survives into the next session, so any
@@ -103,8 +201,11 @@
   ;; ~/.pi/agent/prompts/custom-prompt.md agent-writable. Both depths are pinned
   ;; by probes in scripts/test-sandbox-profile.sh.
   (require-all
+    (subpath (param "PI_AGENT_STATE"))
+    (regex #"/.*prompt[^/]*\.md$"))
+  (require-all
     (subpath (string-append (param "HOME") "/.pi/agent"))
-    (regex #"/\.pi/agent/.*prompt[^/]*\.md$"))
+    (regex #"/.*prompt[^/]*\.md$"))
   ;; These credential/config dirs may be reachable through a malicious project
   ;; symlink if the project boundary is writable. Deny them after the PROJECT
   ;; allow so last-match-wins keeps them protected.
@@ -155,7 +256,17 @@
     (regex #"/hooks$"))
   (require-all
     (subpath (string-append (param "PROJECT") "/.git/modules"))
-    (regex #"/hooks/[^/]*\.sample$")))
+    (regex #"/hooks/[^/]*\.sample$"))
+  ;; OMP-managed checkouts/worktrees are out-of-PROJECT writable Git trees.
+  ;; Preserve hooks directory nodes and dotted files (Git's executable hook
+  ;; names are extensionless) so source such as src/hooks/useFoo.ts works
+  ;; without reopening normal, bare, or separate-git-dir hook executables.
+  (require-all
+    (subpath (string-append (param "OMP_STATE_ROOT") "/wt"))
+    (regex #"/hooks$"))
+  (require-all
+    (subpath (string-append (param "OMP_STATE_ROOT") "/wt"))
+    (regex #"/hooks/[^/]*\.[^/]+$")))
 
 ;; ---------------------------------------------------------------------------
 ;; SECRET READS: deny reading host credential material. Scoped to specific HOME

@@ -8,12 +8,13 @@ testing, and the parts that live **outside** the deploy scripts.
 
 | Component | Where it lives | In this repo? |
 |---|---|---|
-| Guard extension | `~/.pi/agent/extensions/pi-sandbox-guard/` | yes (`src/`); via `npm run deploy` / `deploy:all` |
+| Shared guard extension | `~/.pi/agent/extensions/pi-sandbox-guard/` | yes (`src/`); explicitly injected by both shims |
 | Seatbelt profile + preamble | `~/.local/bin/pi-sandbox.{sb,…}` | yes (`sandbox/`); via `npm run deploy:launchers` / `deploy:all` |
-| Protected `pi` shim | `~/.local/bin/pi` | yes (`launchers/pi`); via `npm run deploy:launchers` / `deploy:all` |
+| Protected `pi` + `omp` shims | `~/.local/bin/{pi,omp}` | one source (`launchers/pi`), installed under both names |
 | Custom launchers (optional) | `~/.local/bin/` | **no**. Keep yours outside this repo; opt in with `--extra-launchers` (template: `launchers/example-custom`) |
 | Executable config | `~/.config/pi-sandbox-guard/executables.conf` | optional example (`config/executables.example.conf`) |
 | Pi (`@earendil-works/pi-coding-agent`) | global npm | **no** (install separately) |
+| OMP (`@oh-my-pi/pi-coding-agent`) | official prebuilt binary | **no** (optional; install separately) |
 
 ## Security model (setup implications)
 
@@ -24,9 +25,10 @@ testing, and the parts that live **outside** the deploy scripts.
 3. **Host environment is trusted; project env is not.** Launch from a real user
    account with a normal home directory. Do not point the shim at
    repo-controlled executable config or ambient hostile `PATH`/`TMPDIR`/`USER`.
-   Note that `PI_PROJECT` and `PI_EXECUTABLE` are privileged overrides, and the
-   first *defines* the write boundary, so a project-supplied value (an approved
-   `.envrc`, for instance) is a real escalation. Set them yourself or not at all.
+   `PI_PROJECT`, executable overrides, and state/profile selectors affect the
+   launch boundary. The shim constrains their values, but a project-supplied
+   value (an approved `.envrc`, for instance) is still privileged input. Set
+   them yourself or not at all.
 4. **Provider tokens are not isolated per tool** by this install. Denying writes
    to `auth.json` is tamper-resistance, not a credential broker.
 
@@ -36,24 +38,24 @@ Full model: [SECURITY.md](../SECURITY.md) and [ARCHITECTURE.md](ARCHITECTURE.md)
 
 ```bash
 # prerequisites (manual, host-specific):
-#   - install Pi by ANY method (see "Which Pi installs are supported" below)
+#   - install Pi; optionally install OMP too (see "Runtime bindings" below)
 #   - ensure /bin/zsh exists and bash, jq, awk are on PATH (all ship with macOS 15+)
 #   - macOS with /usr/bin/sandbox-exec for the OS sandbox layer
 
 # The short version, and all you need on a clean machine:
 git clone https://github.com/ebrindley/pi-sandbox-guard.git && cd pi-sandbox-guard && npm run setup
 
-# `npm run setup` is steps 1-3 below, accepting the detected Pi install without
+# `npm run setup` is steps 1-3 below, accepting the required Pi and optional OMP installs without
 # prompting. Run them separately when you want to review the detected install or
 # redo one step on its own.
 
-# 1. deploy the bash filter + Seatbelt profile + protected pi shim
+# 1. deploy the bash filter + Seatbelt profile + protected pi/omp shims
 npm run deploy:all
 
-# 2. record which Pi install the shim should launch (once per machine)
+# 2. record installed Pi/OMP runtimes (once per machine)
 npm run bind
 
-# 3. confirm a plain `pi` resolves to the shim, not the real Pi
+# 3. confirm plain `pi` and `omp` resolve to the protected shims
 npm run check:path
 
 # 4. optional: confirm installed copies match this checkout
@@ -61,9 +63,11 @@ npm run status
 
 # 5. optional: install your own wrappers from OUTSIDE this repo
 npm run deploy:launchers -- --extra-launchers ~/my-pi-launchers
+# or preserve them in the coordinated release:
+npm run deploy:all -- --extra-launchers ~/my-pi-launchers
 
 # 6. run from a project directory
-cd /some/git/repo && pi   # a repo, OR a fresh dir to scaffold (git init etc.)
+cd /some/git/repo && pi   # or: omp
 ```
 
 ### Deployment commands
@@ -88,15 +92,16 @@ the install to the repo.
 
 ## Protection boundary
 
-The default protected entrypoint is a `pi` shim installed earlier on
-`PATH`, for example in `~/.local/bin`. In normal shell use, `pi` resolves to that
-shim, the shim applies the macOS Seatbelt profile, and then it execs the real Pi
-binary. Custom wrappers installed next to it call that sibling shim directly, so
+The protected entrypoints are byte-identical `pi` and `omp` shims installed
+earlier on `PATH`, for example in `~/.local/bin`. The canonical launcher basename
+selects a closed `pi|omp` binding, applies the shared profile, explicitly injects
+the shared extension, and execs the selected real binary. Custom wrappers call
+the sibling `pi` shim, so
 they do not depend on ambient `PATH` ordering after launch.
 
 Treat this as secure-by-default shell behavior, not impossible-to-bypass global
-enforcement. A command that calls the real Pi binary directly, such as
-`/opt/homebrew/bin/pi`, or a GUI/service launch path that does not include the
+enforcement. A command that calls a real binary directly, such as
+`/opt/homebrew/bin/pi` or `~/.local/lib/omp/omp`, or a GUI/service launch path that does not include the
 shim directory before the real Pi directory, can bypass the shim. Keep
 `~/.local/bin` earlier on `PATH` for interactive shells, and point any executable
 config at the real Pi binary rather than back at the shim.
@@ -115,9 +120,12 @@ Before Seatbelt applies, the preamble/shim:
 See [ARCHITECTURE.md](ARCHITECTURE.md) for detail. Do not launch from unsafe roots (`$HOME`,
 `~/Downloads`, `/`, …); the shim refuses those project boundaries.
 
-## Which Pi installs are supported
+## Runtime bindings
 
-**All of them, after one `npm run bind`.** Auto-detection alone covers only npm
+**Pi is required by the shared setup and its install layouts are supported after
+one `npm run bind`.** OMP is optional; its official prebuilt binary is supported
+and auto-detected at `~/.local/lib/omp/omp`.
+Pi auto-detection alone covers only npm
 installs made *into* a Homebrew or `/usr/local` prefix, because it searches a fixed
 list of trusted path shapes. That list cannot describe the real world:
 
@@ -135,13 +143,16 @@ list of trusted path shapes. That list cannot describe the real world:
 npm run bind                 # detect, confirm, record
 npm run bind -- --show       # what is recorded now
 npm run bind -- --check      # still valid? (exit 3 if stale)
-npm run bind -- --pi /abs/path/to/pi [--node /abs/path/to/node]
+npm run bind -- --pi /abs/path/to/pi --omp /abs/path/to/omp --node /abs/path/to/node
 ```
 
 Binding records an absolute path in `~/.config/pi-sandbox-guard/executables.conf`.
 Re-run it after an upgrade that moves the path (a Node version bump under
 nvm/volta/mise, or a `brew upgrade`); a stale binding **fails closed** with the
 recorded path and the command to fix it, rather than silently falling back.
+
+Install OMP outside `~/.local/bin`, which is reserved for the protected shims.
+The reviewed official installer supports `PI_INSTALL_DIR="$HOME/.local/lib/omp"`.
 
 **Not supported, deliberately:** `npx`/`bunx` and other transient runs, whose path
 changes per invocation, so there is nothing stable to record. Docker and Linux are out
@@ -187,9 +198,12 @@ All config is host-trusted env, never read from the target repo:
 | Var | Meaning | Default |
 |---|---|---|
 | `POLICY_RM_SAFE_ROOTS` | Extra `:`-separated roots under which `rm -rf` is permitted | — |
-| `PI_EXECUTABLE` | Override the real Pi executable used by sandbox launchers | from config, else PATH auto-detect outside the shim dir |
-| `PI_EXECUTABLE_CONFIG` | Path to executable config | `~/.config/pi-sandbox-guard/executables.conf` (pinned/trusted by hardened shim) |
-| `PI_EXECUTABLE_KEY` | Config key for the executable lookup | launcher basename, usually `pi` |
+| `PI_EXECUTABLE` | Ambient override for the real Pi executable | from `pi=` binding |
+| `OMP_EXECUTABLE` | Ambient override for the real OMP executable | from `omp=` binding |
+| `PI_EXECUTABLE_CONFIG` | Path to executable config | ignored by protected shims; pinned to `~/.config/pi-sandbox-guard/executables.conf` |
+| `PI_CODING_AGENT_DIR` | Pi state relocation | exact default or an alternate under `~/.pi` outside the canonical agent subtree; refused for protected OMP |
+| `PI_CONFIG_DIR` | OMP base directory name | `.omp` or a `.omp-*` variant only |
+| `OMP_PROFILE` / `PI_PROFILE` | OMP named profile | active state under the selected `.omp` root |
 | `PI_SANDBOX_PROFILE` | Ignored by the protected shim; the profile is pinned to the shim install dir | `~/.local/bin/pi-sandbox.sb` |
 | `PI_PROJECT` | Explicit project write boundary for the OS sandbox | git top-level, else `$PWD` |
 | `PI_RLIMIT_CPU` | Optional CPU seconds limit for sandboxed Pi process tree | unset |
@@ -209,6 +223,29 @@ untrusted repo can set it, so do not approve one that does.
 Analyzer security events are written under `~/.pi/agent/security-events.log` so they
 survive the Seatbelt layer. A repo-controlled security-log path env var is
 intentionally not supported.
+
+### OMP state constraints
+
+Protected OMP supports its default state root and named profiles.
+The protected launcher accepts exactly one leading `omp --profile <name>` or
+`omp --profile=<name>` flag and mirrors it into the sandbox boundary before OMP
+starts. Later or duplicate profile flags are refused; put the profile first or
+use `OMP_PROFILE`. `OMP_PROFILE` and legacy `PI_PROFILE` remain equivalent
+environment selectors.
+`PI_CODING_AGENT_DIR` relocation is refused; use a named profile instead.
+Active XDG-split OMP roots are refused because they require three independently
+relocated Seatbelt boundaries. Use the real OMP binary directly for migration,
+plugin installation, updates, or XDG-split operation.
+
+OMP's `agent.db` combines operational data and credentials, so it remains
+writable for normal operation. File-backed plugins, extensions, hooks, tools,
+skills, prompts, rules, model configuration, and environment files remain
+read-only in protected mode.
+
+Native administrative subcommands run inside Seatbelt without the agent-session
+extension flag. Agentic subcommands that cannot accept that flag are refused by
+the protected shim; call the real OMP binary only when intentionally accepting
+guard-only or unsandboxed operation.
 
 ## After each agent session
 
@@ -296,7 +333,7 @@ Seatbelt boundary applied to arbitrary agent projects.
 
 ## What is intentionally NOT in the repo
 
-- **`~/.pi/agent/auth.json`, `settings.json`, `trust.json`, `sessions/`**: host
+- **Pi state under `~/.pi/agent` and OMP state under `~/.omp`**: host
   state and credentials (and the sandbox denies writing them from inside the
   profile; that is not full token isolation).
 - **Any live link to the analyzer's origin project**: not a dependency, submodule,
@@ -308,4 +345,3 @@ Seatbelt boundary applied to arbitrary agent projects.
   any external tree. Fix analyzer gaps here, and record any verdict change in
   `test/corpus/corpus.json` and
   [`ARCHITECTURE.md`](ARCHITECTURE.md#known-analyzer-gaps).
-

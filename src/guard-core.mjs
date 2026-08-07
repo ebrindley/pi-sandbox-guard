@@ -21,9 +21,9 @@
 //   { decision: 'allow' | 'ask' | 'block', reason: string, meta: {...} }
 
 import { spawn } from 'node:child_process';
-import { existsSync, statSync } from 'node:fs';
+import { existsSync, readFileSync, statSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
-import { dirname, join } from 'node:path';
+import { dirname, isAbsolute, join } from 'node:path';
 
 const __dirname = dirname(fileURLToPath(import.meta.url));
 
@@ -44,8 +44,12 @@ const SAFE_PATH = '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bi
 /**
  * Absolute path to the Node binary the analyzer uses for path canonicalization.
  *
- * This is `process.execPath` — the interpreter already running this guard — not a
- * PATH lookup. Two reasons:
+ * A deployed guard reads the operator-written `.guard-node` binding beside its
+ * `src/` directory. Source-tree/test use falls back to `process.execPath`. The
+ * deployed binding is required for compiled Bun hosts such as OMP, where
+ * `process.execPath` is the application binary and `-e` is not Node evaluation.
+ *
+ * Neither path uses a PATH lookup. Two reasons:
  *   1. Correctness: node is frequently installed somewhere SAFE_PATH does not
  *      list (nvm/fnm/mise shims, versioned Homebrew kegs such as
  *      /opt/homebrew/opt/node@24/bin). Resolving `node` off SAFE_PATH would fail
@@ -77,7 +81,27 @@ const SAFE_PATH = '/usr/bin:/bin:/usr/sbin:/sbin:/usr/local/bin:/opt/homebrew/bi
  *     and the exec are still distinct moments).
  * Passed to the analyzer as GUARD_NODE; the script invokes "$GUARD_NODE" directly.
  */
-const GUARD_NODE = process.execPath;
+const DEPLOYED_GUARD_NODE_BINDING = join(__dirname, '..', '.guard-node');
+const INVALID_DEPLOYED_GUARD_NODE = join(__dirname, '..', '.guard-node.invalid');
+
+function resolveGuardNode() {
+  if (!existsSync(DEPLOYED_GUARD_NODE_BINDING)) return process.execPath;
+  try {
+    const raw = readFileSync(DEPLOYED_GUARD_NODE_BINDING, 'utf8');
+    const configured = raw.endsWith('\n') ? raw.slice(0, -1) : raw;
+    if (!configured || configured.includes('\n') || configured.includes('\r')) {
+      return INVALID_DEPLOYED_GUARD_NODE;
+    }
+    if (!isAbsolute(configured)) return INVALID_DEPLOYED_GUARD_NODE;
+    const stat = statSync(configured);
+    if (!stat.isFile() || (stat.mode & 0o111) === 0) return INVALID_DEPLOYED_GUARD_NODE;
+    return configured;
+  } catch {
+    return INVALID_DEPLOYED_GUARD_NODE;
+  }
+}
+
+const GUARD_NODE = resolveGuardNode();
 
 /**
  * Helpers the analyzer resolves via SAFE_PATH. Missing any => guard cannot run
@@ -229,7 +253,7 @@ const PREFLIGHT_PROBE_TIMEOUT_MS = 10_000;
  *   the probe spawns so tests can present a broken helper; `nodeBin` replaces the
  *   pinned GUARD_NODE binary so tests can present a broken/absent interpreter.
  *   Production callers must never pass either (the analyzer subprocess always uses
- *   SAFE_PATH, and GUARD_NODE is always process.execPath).
+ *   SAFE_PATH, and production GUARD_NODE comes from the deployed binding).
  * @param {string} [testOverrides.path]
  * @param {string} [testOverrides.nodeBin]
  * @returns {Promise<{ok: boolean, missing: string[], scriptPresent: boolean, platform: string}>}

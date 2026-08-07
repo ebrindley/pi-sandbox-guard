@@ -53,6 +53,15 @@ do
 done
 pass "bash -n on ops scripts"
 
+# The deploy/status helper must classify the fixed writable-root shapes that can
+# make the pinned canonicalizer replaceable under Seatbelt.
+ops_path_is_known_sandbox_write_root "$HOME/.cache/node/bin/node" "$HOME" "$REPO_ROOT" \
+  || fail "known writable-root helper missed ~/.cache"
+if ops_path_is_known_sandbox_write_root "/opt/homebrew/bin/node" "$HOME" "$REPO_ROOT"; then
+  fail "known writable-root helper rejected Homebrew Node outside the writable roots"
+fi
+pass "guard Node writable-root classification"
+
 # --- 2. setup-hooks --check is non-mutating; --set only touches repo-local git config ---
 # Exercising --set means writing repo-local core.hooksPath, so restore whatever the
 # developer had. Without this, merely running the test suite opts the repository into
@@ -498,12 +507,62 @@ PI_SANDBOX_CONFIG_DIR="$BIND_CONF_DIR" bash "$BIND_SH" --pi "$BIND_OK_DIR/pi" --
   || fail "bind refused a legitimate out-of-prefix target"
 grep -q "^pi=$BIND_OK_DIR/pi$" "$BIND_CONF_DIR/executables.conf" \
   || fail "bind did not record the pi key"
+if grep -q '^node=' "$BIND_CONF_DIR/executables.conf"; then
+  fail "bind recorded an unnecessary Node interpreter for a native Pi target"
+fi
 grep -q '^someother=/usr/bin/true$' "$BIND_CONF_DIR/executables.conf" \
   || fail "bind dropped an unrelated key on write"
 grep -q '^# hand-written comment$' "$BIND_CONF_DIR/executables.conf" \
   || fail "bind dropped a hand-written comment on write"
 PI_SANDBOX_CONFIG_DIR="$BIND_CONF_DIR" bash "$BIND_SH" --check >/dev/null \
   || fail "bind --check rejected a fresh valid binding"
+
+# A native Pi target needs no launcher interpreter. The deployed analyzer owns
+# its separate .guard-node binding, so node= must remain optional here.
+printf 'pi=/usr/bin/true\n' > "$BIND_CONF_DIR/executables.conf"
+PI_SANDBOX_CONFIG_DIR="$BIND_CONF_DIR" bash "$BIND_SH" --check >/dev/null \
+  || fail "bind --check incorrectly required node= for a native Pi target"
+
+# Detect mode with an explicit fixture path must preserve an operator-selected
+# interpreter for a Node shebang instead of replacing it from ambient PATH.
+# `--detect --pi` keeps this deterministic on hosts with their own Pi install.
+printf '#!/usr/bin/env node\n' > "$BIND_OK_DIR/pi-node"
+chmod +x "$BIND_OK_DIR/pi-node"
+cp /usr/bin/true "$BIND_OK_DIR/custom-node"
+chmod +x "$BIND_OK_DIR/custom-node"
+printf 'pi=%s\nnode=%s\n' \
+  "$BIND_OK_DIR/pi-node" "$BIND_OK_DIR/custom-node" \
+  > "$BIND_CONF_DIR/executables.conf"
+PI_SANDBOX_CONFIG_DIR="$BIND_CONF_DIR" bash "$BIND_SH" \
+  --detect --pi "$BIND_OK_DIR/pi-node" --yes >/dev/null \
+  || fail "bind detect mode failed to preserve a recorded interpreter"
+grep -q "^node=$BIND_OK_DIR/custom-node$" "$BIND_CONF_DIR/executables.conf" \
+  || fail "bind detect mode replaced the operator-recorded Node interpreter"
+
+# Status owns one aggregate validation result for required Pi plus any recorded
+# optional OMP binding. Its user-facing and preferred JSON names must not blame
+# Pi when only OMP is stale; `pi_binding` remains a compatibility alias.
+STATUS_SH="$REPO_ROOT/scripts/status.sh"
+printf 'pi=/usr/bin/true\nomp=/opt/homebrew/bin/omp-vanished\n' \
+  > "$BIND_CONF_DIR/executables.conf"
+status_json="$(PI_SANDBOX_CONFIG_DIR="$BIND_CONF_DIR" bash "$STATUS_SH" \
+  --dest-guard "$BIND_CFG_DIR/missing-guard" \
+  --dest-launchers "$BIND_CFG_DIR/missing-launchers" \
+  --allow-missing --json)" \
+  || fail "status JSON failed for a host-local stale binding"
+printf '%s\n' "$status_json" \
+  | jq -e '.runtime_binding == "stale" and .pi_binding == "stale"' >/dev/null \
+  || fail "status JSON did not expose aggregate runtime binding state and compatibility alias"
+status_text="$(PI_SANDBOX_CONFIG_DIR="$BIND_CONF_DIR" bash "$STATUS_SH" \
+  --dest-guard "$BIND_CFG_DIR/missing-guard" \
+  --dest-launchers "$BIND_CFG_DIR/missing-launchers" \
+  --allow-missing)" \
+  || fail "status text failed for a host-local stale binding"
+printf '%s\n' "$status_text" | grep -q 'runtime bindings STALE' \
+  || fail "status text did not report aggregate runtime binding staleness"
+if printf '%s\n' "$status_text" | grep -q 'pi binding STALE'; then
+  fail "status text incorrectly blamed Pi for aggregate binding staleness"
+fi
 
 # Staleness must be exit 3 (actionable), never exit 0 (silently fine).
 printf 'pi=/opt/homebrew/bin/pi-vanished\n' > "$BIND_CONF_DIR/executables.conf"

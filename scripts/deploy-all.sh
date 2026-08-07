@@ -18,6 +18,7 @@
 #   scripts/deploy-all.sh [--dry-run] [--force-degraded] [--skip-tests]
 #                         [--dest-guard <pi-sandbox-guard-dir>]
 #                         [--dest-launchers <bin-dir>]
+#                         [--extra-launchers <dir>]
 
 set -euo pipefail
 
@@ -30,6 +31,7 @@ FORCE_DEGRADED=0
 SKIP_TESTS=0
 DEST_GUARD="$(ops_default_guard_dest)"
 DEST_LAUNCHERS="$(ops_default_launchers_dest)"
+EXTRA_LAUNCHER_ARGS=()
 
 say() { ops_say "$@"; }
 die() { ops_die "$@"; }
@@ -45,6 +47,10 @@ while [ $# -gt 0 ]; do
     --dest-launchers)
       [ $# -ge 2 ] || die "--dest-launchers requires a directory"
       DEST_LAUNCHERS="$2"; shift 2 ;;
+    --extra-launchers)
+      [ $# -ge 2 ] || die "--extra-launchers requires a directory"
+      ops_require_single_line "--extra-launchers" "$2"
+      EXTRA_LAUNCHER_ARGS+=(--extra-launchers "$2"); shift 2 ;;
     *) die "unknown arg: $1" ;;
   esac
 done
@@ -146,6 +152,7 @@ run_deploy_local \
 PHASE="preflight-launchers"
 say "[deploy-all] preflight launchers (dry-run) -> $DEST_LAUNCHERS"
 bash "$REPO_ROOT/scripts/deploy-launchers.sh" \
+  ${EXTRA_LAUNCHER_ARGS+"${EXTRA_LAUNCHER_ARGS[@]}"} \
   --dry-run --release-id "$RELEASE_ID" \
   --dest "$DEST_LAUNCHERS" --state-file "$LAUNCHERS_STATE" \
   || die "launchers preflight failed; no mutation performed"
@@ -176,7 +183,8 @@ fi
 PHASE="deploy-launchers"
 say "[deploy-all] deploying launchers -> $DEST_LAUNCHERS"
 if bash "$REPO_ROOT/scripts/deploy-launchers.sh" \
-  --release-id "$RELEASE_ID" \
+    ${EXTRA_LAUNCHER_ARGS+"${EXTRA_LAUNCHER_ARGS[@]}"} \
+    --release-id "$RELEASE_ID" \
   --dest "$DEST_LAUNCHERS" --state-file "$LAUNCHERS_STATE"
 then
   LAUNCHERS_OK=1
@@ -201,7 +209,5 @@ say "[deploy-all] launchers -> $DEST_LAUNCHERS"
 # An unconditional pointer, not a state check: the binding is host-local state, not a
 # deployed artifact, and reporting it here would mean reconstructing the home the shim
 # derives for itself. `status.sh` owns state reporting.
-say "[deploy-all] if you have not recorded the Pi install yet: npm run bind"
-say "[deploy-all]   (auto-detection covers only an npm -g install into /opt/homebrew"
-say "[deploy-all]    or /usr/local; anything else fails closed until bound)"
+say "[deploy-all] record installed Pi/OMP runtimes with: npm run bind"
 say "[deploy-all] verify with: npm run status"

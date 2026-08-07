@@ -2,7 +2,7 @@
   "name": "@ebrindley/pi-sandbox-guard",
   "version": "0.1.0",
   "private": true,
-  "description": "Fail-closed macOS Seatbelt sandbox for the Pi coding agent: writes and deletes outside your project are denied at the kernel, bar an explicit allow-list (temp dirs, tool caches). Plus a pre-execution bash-command filter. Requires a deploy step; npm install alone does not activate it.",
+  "description": "Fail-closed macOS Seatbelt sandbox and bash guard for the Pi and Oh My Pi coding agents.",
   "author": "Ed Brindley",
   "type": "module",
   "main": "src/index.mjs",
@@ -52,6 +52,8 @@
   "keywords": [
     "pi-package",
     "pi",
+    "omp",
+    "oh-my-pi",
     "pi-coding-agent",
     "ai-agent",
     "security",

@@ -78,7 +78,7 @@ LAUNCHERS_PRESENT=0
 if [ -d "$DEST_GUARD" ]; then
   GUARD_PRESENT=1
 fi
-if [ -f "$DEST_LAUNCHERS/pi-sandbox.sb" ] || [ -f "$DEST_LAUNCHERS/pi" ]; then
+if [ -f "$DEST_LAUNCHERS/pi-sandbox.sb" ] || [ -f "$DEST_LAUNCHERS/pi" ] || [ -f "$DEST_LAUNCHERS/omp" ]; then
   LAUNCHERS_PRESENT=1
 fi
 
@@ -100,6 +100,22 @@ if [ "$GUARD_PRESENT" -eq 1 ]; then
   check_pair "src/validate-bash-command.sh" \
     "$REPO_ROOT/src/validate-bash-command.sh" \
     "$DEST_GUARD/src/validate-bash-command.sh"
+  GUARD_NODE="$(ops_stamp_get "$GUARD_STAMP" guard_node)"
+  if [ -z "$GUARD_NODE" ] && [ -f "$DEST_GUARD/.guard-node" ]; then
+    GUARD_NODE="$(head -1 "$DEST_GUARD/.guard-node")"
+  fi
+  if [ -z "$GUARD_NODE" ] || [ ! -x "$GUARD_NODE" ] || [ -d "$GUARD_NODE" ]; then
+    report "drift" "guard-node" "missing or stale executable binding: ${GUARD_NODE:-none}"
+    DRIFT=1
+  elif ops_path_is_known_sandbox_write_root "$GUARD_NODE" "$HOME" "$REPO_ROOT"; then
+    report "drift" "guard-node" "binding is inside a sandbox-writable root: $GUARD_NODE"
+    DRIFT=1
+  elif [ "$(cat "$DEST_GUARD/.guard-node" 2>/dev/null || true)" != "$GUARD_NODE" ]; then
+    report "drift" "guard-node" "stamp and deployed .guard-node disagree"
+    DRIFT=1
+  else
+    report "ok" "guard-node" "$GUARD_NODE"
+  fi
   # Stamped hashes must match installed files (detect partial/corrupt stamps).
   if [ -f "$GUARD_STAMP" ]; then
     stamped="$(ops_stamp_get "$GUARD_STAMP" hash_guard_core_mjs)"
@@ -136,6 +152,9 @@ if [ "$LAUNCHERS_PRESENT" -eq 1 ]; then
   check_pair "launcher:pi" \
     "$REPO_ROOT/launchers/pi" \
     "$DEST_LAUNCHERS/pi"
+  check_pair "launcher:omp" \
+    "$REPO_ROOT/launchers/pi" \
+    "$DEST_LAUNCHERS/omp"
   # Extra launchers came from --extra-launchers outside this repo, so there is no
   # repo source to diff. Verify each against the hash recorded at deploy time —
   # that still detects post-install tampering and a stale wrapper left on PATH
@@ -151,7 +170,7 @@ if [ "$LAUNCHERS_PRESENT" -eq 1 ]; then
     OLD_IFS="$IFS"; IFS=','
     for l in $recorded_names; do
       IFS="$OLD_IFS"
-      if [ "$l" != "pi" ]; then
+      if [ "$l" != "pi" ] && [ "$l" != "omp" ]; then
         dst="$DEST_LAUNCHERS/$l"
         stamped="$(ops_stamp_get "$LAUNCHERS_STAMP" "hash_launcher_${l}")"
         if [ ! -f "$dst" ]; then
@@ -266,8 +285,10 @@ fi
 BIND_CONF="${PI_SANDBOX_CONFIG_DIR:-$HOME/.config/pi-sandbox-guard}/executables.conf"
 BIND_STATE="unbound"
 BIND_PI=""
+BIND_OMP=""
 if [ -f "$BIND_CONF" ]; then
   BIND_PI="$(sed -n 's/^[[:space:]]*pi[[:space:]]*=[[:space:]]*//p' "$BIND_CONF" | head -1)"
+  BIND_OMP="$(sed -n 's/^[[:space:]]*omp[[:space:]]*=[[:space:]]*//p' "$BIND_CONF" | head -1)"
   # Delegate to bind-executable.sh --check rather than testing -x here: a bare -x test
   # calls a recorded directory or write-root executable "ok" while the launcher refuses
   # it, and status would then disagree with the thing it is reporting on. One rule set,
@@ -283,21 +304,54 @@ if [ -f "$BIND_CONF" ]; then
 fi
 if [ "$JSON" -eq 0 ]; then
   case "$BIND_STATE" in
-    ok)      say "[status] pi binding: $BIND_PI" ;;
-    stale)   say "[status] pi binding STALE (recorded path is not executable): $BIND_PI"
+    ok)      say "[status] runtime bindings: ok" ;;
+    stale)   say "[status] runtime bindings STALE (one or more recorded paths are unusable)"
+             say "[status]   inspect: npm run bind -- --check"
              say "[status]   re-record: npm run bind" ;;
-    unbound) say "[status] pi binding: none recorded (auto-detection covers only npm installs"
-             say "[status]   into /opt/homebrew or /usr/local; otherwise run: npm run bind)" ;;
+    unbound) say "[status] runtime bindings: required Pi binding not recorded"
+             say "[status]   auto-detection covers only npm installs into /opt/homebrew or /usr/local"
+             say "[status]   otherwise run: npm run bind" ;;
   esac
+  if [ -n "$BIND_PI" ]; then
+    say "[status] pi binding: $BIND_PI"
+  else
+    say "[status] pi binding: none"
+  fi
+  if [ -n "$BIND_OMP" ]; then
+    say "[status] omp binding: $BIND_OMP"
+  else
+    say "[status] omp binding: none recorded (OMP support inactive until bound)"
+  fi
+fi
+
+# Native Pi discovery can be relocated independently of this deploy destination.
+# The protected shim still injects the extension explicitly, but direct/filter-only
+# Pi launches would not discover it, so surface the mismatch as deployment drift.
+if [ -n "${PI_CODING_AGENT_DIR:-}" ]; then
+  EFFECTIVE_GUARD_DEST="$PI_CODING_AGENT_DIR/extensions/pi-sandbox-guard"
+  if [ "$EFFECTIVE_GUARD_DEST" != "$DEST_GUARD" ]; then
+    report "drift" "pi-native-extension-discovery" \
+      "PI_CODING_AGENT_DIR expects $EFFECTIVE_GUARD_DEST; deployed at $DEST_GUARD (protected shim injection still works)"
+    DRIFT=1
+  fi
+fi
+if [ -n "${PI_PACKAGE_DIR:-}" ]; then
+  report "drift" "pi-native-extension-discovery" \
+    "PI_PACKAGE_DIR is set; Pi may derive a different agent directory (protected shim injection still works)"
+  DRIFT=1
 fi
 
 if [ "$JSON" -eq 1 ]; then
   # Structured quoting keeps forged or unusual stamp values from corrupting
-  # the JSON document. No deployed stamp is ever evaluated as shell code.
-  printf '{"guard_present":%s,"launchers_present":%s,"release_match":%s,"guard_release_id":%s,"launchers_release_id":%s,"pi_binding":%s,"pi_binding_path":%s,"drift":%s}\n' \
+  # the JSON document. `pi_binding` remains as a compatibility alias for the
+  # aggregate runtime-binding state; new consumers should use `runtime_binding`.
+  # No deployed stamp is ever evaluated as shell code.
+  printf '{"guard_present":%s,"launchers_present":%s,"release_match":%s,"guard_release_id":%s,"launchers_release_id":%s,"runtime_binding":%s,"pi_binding":%s,"pi_binding_path":%s,"omp_binding_path":%s,"drift":%s}\n' \
     "$GUARD_PRESENT" "$LAUNCHERS_PRESENT" "$(ops_json_quote "$RELEASE_MATCH")" \
     "$(ops_json_quote "${RID_G:-}")" "$(ops_json_quote "${RID_L:-}")" \
-    "$(ops_json_quote "$BIND_STATE")" "$(ops_json_quote "$BIND_PI")" "$DRIFT"
+    "$(ops_json_quote "$BIND_STATE")" "$(ops_json_quote "$BIND_STATE")" \
+    "$(ops_json_quote "$BIND_PI")" \
+    "$(ops_json_quote "$BIND_OMP")" "$DRIFT"
 fi
 
 if [ "$DRIFT" -ne 0 ]; then

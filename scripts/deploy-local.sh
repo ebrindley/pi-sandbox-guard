@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 #
 # deploy-local.sh — build a repo-independent, self-contained copy of pi-sandbox-guard
-# into Pi's auto-discovery dir (~/.pi/agent/extensions/pi-sandbox-guard/).
+# into the shared extension dir (~/.pi/agent/extensions/pi-sandbox-guard/).
 #
 # After deploy, Pi loads the guard from the deployed COPY — the git repo can be
 # moved or deleted and Pi stays guarded. The repo remains the source of truth;
@@ -153,6 +153,23 @@ cp "$SRC_ADAPTER" "$STAGE/src/index.mjs"
 cp "$SRC_ANALYZER" "$STAGE/src/validate-bash-command.sh"
 chmod +x "$STAGE/src/validate-bash-command.sh"
 
+# OMP's release build is a compiled Bun executable, so process.execPath inside
+# the extension is OMP rather than Node. Pin the Node running this deploy in
+# protected host state beside the extension. The runtime reads this file
+# directly; no ambient executable selector reaches the analyzer.
+GUARD_NODE="$(node -p 'process.execPath')"
+case "$GUARD_NODE" in
+  /*) ;;
+  *) die "node process.execPath is not absolute: $GUARD_NODE" ;;
+esac
+[ -x "$GUARD_NODE" ] && [ ! -d "$GUARD_NODE" ] \
+  || die "node process.execPath is not an executable file: $GUARD_NODE"
+if ops_path_is_known_sandbox_write_root "$GUARD_NODE" "$HOME" "$REPO_ROOT"; then
+  die "node process.execPath is inside a sandbox-writable root: $GUARD_NODE"
+fi
+printf '%s\n' "$GUARD_NODE" > "$STAGE/.guard-node"
+chmod 600 "$STAGE/.guard-node"
+
 # Fail loudly if the staged copy drifted from source (copy/FS glitch).
 ops_require_same_hash "guard-core.mjs" "$SRC_CORE" "$STAGE/src/guard-core.mjs"
 ops_require_same_hash "index.mjs" "$SRC_ADAPTER" "$STAGE/src/index.mjs"
@@ -185,6 +202,7 @@ PI_VERSION="$(pi --version 2>/dev/null | head -1 || echo 'unknown')"
   echo "hash_index_mjs=$(ops_hash_file "$STAGE/src/index.mjs")"
   echo "hash_guard_core_mjs=$(ops_hash_file "$STAGE/src/guard-core.mjs")"
   echo "hash_analyzer_sh=$(ops_hash_file "$STAGE/src/validate-bash-command.sh")"
+  echo "guard_node=$GUARD_NODE"
   echo "hash_algo=sha256"
   echo "analyzer_provenance=local-file-integrity-only; upstream not attested"
 } > "$STAGE/.deployed-version"
@@ -254,6 +272,8 @@ chmod +x "$DEST/src/validate-bash-command.sh" 2>/dev/null || true
 ops_require_same_hash "installed guard-core.mjs" "$SRC_CORE" "$DEST/src/guard-core.mjs"
 ops_require_same_hash "installed index.mjs" "$SRC_ADAPTER" "$DEST/src/index.mjs"
 ops_require_same_hash "installed analyzer" "$SRC_ANALYZER" "$DEST/src/validate-bash-command.sh"
+[ "$(cat "$DEST/.guard-node")" = "$GUARD_NODE" ] \
+  || die "installed guard Node binding does not match staged binding"
 
 if [ -n "$STATE_FILE" ]; then
   {
@@ -274,5 +294,5 @@ say "[deploy] release_id=$RELEASE_ID"
 say "[deploy] provenance:"
 sed 's/^/         /' "$DEST/.deployed-version"
 say ""
-say "[deploy] Pi will auto-discover it on next launch."
-say "[deploy] Verify load with:  pi --list-models  (look for no load errors)"
+say "[deploy] Protected pi/omp launchers inject this shared extension explicitly."
+say "[deploy] Pi also auto-discovers this location on direct/filter-only launches."

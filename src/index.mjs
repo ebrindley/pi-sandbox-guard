@@ -1,4 +1,4 @@
-// index.mjs — Pi extension entry point for pi-sandbox-guard.
+// index.mjs — shared Pi/OMP extension entry point for pi-sandbox-guard.
 //
 // A best-effort, fail-closed PRE-EXECUTION guard for the `bash` tool. It is NOT
 // a sandbox: Pi allows later handlers to mutate event.input with no
@@ -8,7 +8,32 @@
 // Maps the harness-agnostic core Decision onto Pi's { block, reason } contract.
 
 import { statSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 import { analyzeCommand, preflight, SEVERITY } from './guard-core.mjs';
+
+const EVENT_STATE_KEY = Symbol.for('@ebrindley/pi-sandbox-guard/event-state');
+const eventState = globalThis[EVENT_STATE_KEY] ?? {
+  resultsByCopy: new Map(),
+  processed: 0,
+};
+const COPY_KEY = fileURLToPath(import.meta.url);
+if (!globalThis[EVENT_STATE_KEY]) {
+  Object.defineProperty(globalThis, EVENT_STATE_KEY, {
+    value: eventState,
+    configurable: false,
+    enumerable: false,
+    writable: false,
+  });
+}
+
+export function resetEventStateForTests() {
+  eventState.resultsByCopy = new Map();
+  eventState.processed = 0;
+}
+
+export function processedEventCountForTests() {
+  return eventState.processed;
+}
 
 /**
  * Collect the DISTINCT, existing-directory cwd candidates for a tool call.
@@ -79,11 +104,11 @@ function warnIfUnverifiedSandbox() {
   // eslint-disable-next-line no-console
   console.error(
     '[pi-sandbox-guard] FILTER-ONLY: could not verify launch through the protected ' +
-      'Seatbelt shim. The bash filter is active; this guard is not applying an OS ' +
+      'Pi/OMP Seatbelt shim. The bash filter is active; this guard is not applying an OS ' +
       'sandbox, so assume out-of-project writes are uncontained unless you know one ' +
       'is in place by other means. For the full guard, run `npm run deploy:launchers` ' +
       'and `npm run bind` from a pi-sandbox-guard checkout, then launch via the ' +
-      '`pi` shim on PATH (startup prints "OS sandbox ON").',
+      '`pi` or `omp` shim on PATH (startup prints "OS sandbox ON").',
   );
 }
 
@@ -118,7 +143,7 @@ export default function (pi) {
       health = { ok: false, missing: [], scriptPresent: false, platform: process.platform };
     });
 
-  pi.on('tool_call', async (event, ctx) => {
+  const handleToolCall = async (event, ctx) => {
     // Only gate the bash tool. Everything else passes through untouched.
     const isBash =
       typeof pi.isToolCallEventType === 'function'
@@ -236,5 +261,20 @@ export default function (pi) {
         // Unreachable; core only emits allow/ask/block. Fail closed anyway.
         return { block: true, reason: '[pi-sandbox-guard] Unknown verdict — blocked as fail-safe.' };
     }
+  };
+
+  pi.on('tool_call', (event, ctx) => {
+    if (!event || typeof event !== 'object') return handleToolCall(event, ctx);
+    let copyResults = eventState.resultsByCopy.get(COPY_KEY);
+    if (!copyResults) {
+      copyResults = new WeakMap();
+      eventState.resultsByCopy.set(COPY_KEY, copyResults);
+    }
+    const cached = copyResults.get(event);
+    if (cached) return cached;
+    eventState.processed += 1;
+    const result = handleToolCall(event, ctx);
+    copyResults.set(event, result);
+    return result;
   });
 }
