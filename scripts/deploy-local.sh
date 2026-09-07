@@ -204,6 +204,7 @@ PI_VERSION="$(pi --version 2>/dev/null | head -1 || echo 'unknown')"
 
 # --- 4. Verify the STAGED copy actually works (preflight on the artifact path) ---
 say "[deploy] verifying staged artifact (preflight on deployed copy)"
+STAGED_DEGRADED=0
 PREFLIGHT_OUT="$(STAGE_PATH="$STAGE" node -e "
   import { pathToFileURL } from 'node:url';
   import(pathToFileURL(process.env.STAGE_PATH + '/src/guard-core.mjs').href).then(m=>m.preflight()).then(r=>{
@@ -212,6 +213,7 @@ PREFLIGHT_OUT="$(STAGE_PATH="$STAGE" node -e "
   }).catch(e=>{ console.error(e); process.exit(4); });
 ")" || {
   if [ "$FORCE_DEGRADED" -eq 1 ]; then
+    STAGED_DEGRADED=1
     say "[deploy] staged preflight not ok ($PREFLIGHT_OUT); --force-degraded, continuing."
   else
     die "staged artifact preflight failed: $PREFLIGHT_OUT"
@@ -219,12 +221,26 @@ PREFLIGHT_OUT="$(STAGE_PATH="$STAGE" node -e "
 }
 say "[deploy] staged preflight: $PREFLIGHT_OUT"
 
-# Functional check: staged copy blocks a catastrophic command, allows a benign one.
+# Functional check: healthy analyzer blocks/allows; degraded adapter blocks ALL bash.
 say "[deploy] verifying staged copy block/allow behavior"
-STAGE_PATH="$STAGE" node -e "
+STAGE_PATH="$STAGE" STAGED_DEGRADED="$STAGED_DEGRADED" node -e "
   import { pathToFileURL } from 'node:url';
   import(pathToFileURL(process.env.STAGE_PATH + '/src/guard-core.mjs').href).then(async m=>{
     const tmp=process.env.TMPDIR||'/tmp';
+    if(process.env.STAGED_DEGRADED==='1') {
+      const adapter=await import(pathToFileURL(process.env.STAGE_PATH + '/src/index.mjs').href);
+      let handler;
+      adapter.default({
+        isToolCallEventType: (name,event)=>name===event.toolName,
+        on: (event,fn)=>{ if(event==='tool_call') handler=fn; }
+      });
+      for(const command of ['rm -rf /','ls -la']) {
+        const result=await handler({toolName:'bash',input:{command,cwd:tmp}},{});
+        if(result?.block!==true) { console.error('FAIL: degraded adapter did not block:',command); process.exit(8); }
+      }
+      console.log('staged degraded behavior OK: all bash blocked');
+      return;
+    }
     const blk=await m.analyzeCommand('rm -rf /',{cwd:tmp,timeoutMs:6000});
     const alw=await m.analyzeCommand('ls -la',{cwd:tmp,timeoutMs:6000});
     if(blk.decision!=='block') { console.error('FAIL: rm -rf / not blocked:',blk.decision); process.exit(5); }

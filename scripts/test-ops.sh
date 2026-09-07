@@ -119,6 +119,27 @@ else
   pass "deploy-local dry-run (non-macOS)"
 fi
 
+# A copied source fixture simulates a missing runtime helper without changing
+# system helpers or the production checkout. The adapter must fail closed.
+DEGRADED_REPO="$WORKDIR/degraded-repo"
+mkdir -p "$DEGRADED_REPO/scripts" "$DEGRADED_REPO/src"
+cp "$REPO_ROOT/scripts/deploy-local.sh" "$REPO_ROOT/scripts/lib-ops.sh" \
+  "$REPO_ROOT/scripts/extension-entry.ts" "$DEGRADED_REPO/scripts/"
+cp "$REPO_ROOT/src/index.mjs" "$REPO_ROOT/src/validate-bash-command.sh" "$DEGRADED_REPO/src/"
+sed "s/const REQUIRED_HELPERS = /const REQUIRED_HELPERS = ['pi-guard-missing-helper-fixture', .../; s/\['bash', 'jq', 'awk'\];/['bash', 'jq', 'awk']];/" \
+  "$REPO_ROOT/src/guard-core.mjs" > "$DEGRADED_REPO/src/guard-core.mjs"
+if bash "$DEGRADED_REPO/scripts/deploy-local.sh" --skip-tests \
+  --dest "$WORKDIR/degraded/pi-sandbox-guard" > "$WORKDIR/degraded-refused.log" 2>&1; then
+  fail "deploy accepted unhealthy artifact without --force-degraded"
+fi
+[ ! -e "$WORKDIR/degraded/pi-sandbox-guard" ] || fail "unhealthy deploy installed an artifact"
+bash "$DEGRADED_REPO/scripts/deploy-local.sh" --force-degraded --skip-tests \
+  --dest "$WORKDIR/degraded/pi-sandbox-guard" > "$WORKDIR/degraded-forced.log" 2>&1 \
+  || fail "--force-degraded --skip-tests rejected fail-closed artifact"
+grep -q 'staged degraded behavior OK' "$WORKDIR/degraded-forced.log" \
+  || fail "forced degraded deploy did not verify adapter block-all behavior"
+pass "forced degraded deployment checks adapter fail-closed behavior"
+
 # --- 5. Real deploy into TEMP dirs only (coordinated), then status ---
 # Real launcher deploy requires STRICT Seatbelt apply. Non-strict skip exits 0,
 # so probe with STRICT=1 to decide whether the install path is runnable here.
