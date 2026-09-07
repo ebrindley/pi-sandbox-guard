@@ -271,7 +271,7 @@ The gate is therefore local and must run on macOS:
 ```sh
 npm test                          # full suite, ~140s
 npm run test:fast                 # ~12s: adapter, degraded, shim, launcher lint, SBPL
-npm run test:analyzer             # ~128s: smoke + 369-case corpus
+npm run test:analyzer             # ~128s: smoke + 383-case corpus
 npm run test:sandbox-profile      # SBPL compile + live apply probes only
 ```
 
@@ -296,7 +296,7 @@ Two reasons for this shape. **It gates every branch, not just `main`,** because
 changes land here by squash-merging a PR, and GitHub does that server-side, so no
 local push to `main` ever happens and a `main`-only gate would never fire on the
 workflow actually in use. **It is tiered** because ~128s of the ~140s total is the
-analyzer path (`test/corpus.mjs` runs 369 cases), and those stages only
+analyzer path (`test/corpus.mjs` runs 383 cases), and those stages only
 characterize `src/` and `test/corpus/`; running them for a docs edit
 buys nothing while making the gate annoying enough to invite habitual skipping,
 which is the real failure mode.

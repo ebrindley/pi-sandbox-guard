@@ -51,7 +51,7 @@ disarm it entirely, is a vulnerability. When unsure, use the private advisory.
 
 Two things worth knowing:
 
-- The analyzer's verdicts are pinned by `test/corpus/corpus.json` (369 cases).
+- The analyzer's verdicts are pinned by `test/corpus/corpus.json` (383 cases).
   Run `npm test` after any change to it; a changed verdict shows up as a
   corpus failure, which is the intended tripwire.
 - `npm run setup:hooks` installs a tiered pre-push gate: `npm run test:fast`
