@@ -3350,7 +3350,13 @@ scan_cd_relative_rm() {
                         /*) lexical_normalize_into "$op" ;;
                         "~"|"~"/*) lexical_normalize_into "${op/#\~/$HOME}" ;;
                         *) [[ "$op_known" == true ]] || continue
-                           lexical_normalize_into "$op_cwd/$op" ;;
+                           lexical_normalize_into "$op_cwd/$op"
+                           # Relative project paths under /Users are not system
+                           # paths. Preserve hard denial for critical targets.
+                           if is_literal_critical_system_path "$_lexical_result" || [[ "$_lexical_result" == / || "$_lexical_result" == "$HOME" ]]; then
+                               echo "deny:$op (operand count exceeds $max_rm_operands)"; return 0
+                           fi
+                           continue ;;
                     esac
                     if is_under_catastrophic_root "$_lexical_result"; then
                         echo "deny:$op (operand count exceeds $max_rm_operands)"; return 0
@@ -3752,7 +3758,10 @@ if [ "${NOSYNC_OVERSIZED_NO_RM:-0}" != "1" ] && has_rf_flags "$normalized_cmd"; 
             allow)
                 # A lone rm is done: its operand names are not commands for the
                 # flat warning patterns below. Compound commands still need them.
-                is_compound_command "$normalized_cmd" || exit 0
+                if ! is_compound_command "$normalized_cmd"; then
+                    IFS= read -r first_rm_word < <(tokenize_command "$normalized_cmd")
+                    case "$first_rm_word" in rm|*/rm) exit 0 ;; esac
+                fi
                 ;;
         esac
     fi
