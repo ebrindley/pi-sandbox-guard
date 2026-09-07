@@ -390,6 +390,31 @@ awk '
 ' "$REPO_ROOT/launchers/example-custom" > "$LINT_DIR/branch-shim-execs"
 node "$REPO_ROOT/scripts/check-launchers.mjs" --sources "$LINT_DIR/branch-shim-execs" >/dev/null \
   || fail "check-launchers rejected multiple protected conditional handoffs"
+# Bindings must dominate calls: a conditional default preserves inherited values,
+# and a later literal assignment cannot protect an earlier invocation.
+for body in \
+  'if [ -z "${PI_SHIM:-}" ]; then
+PI_SHIM="${0:A:h}/pi"
+fi
+exec "$PI_SHIM" "$@"' \
+  'exec "$PI_SHIM" "$@"
+PI_SHIM="${0:A:h}/pi"' \
+  'if [ -z "${CURL_BIN:-}" ]; then
+CURL_BIN="/usr/bin/curl"
+fi
+"$CURL_BIN" -q
+PI_SHIM="${0:A:h}/pi"
+exec "$PI_SHIM" "$@"' \
+  '"$CURL_BIN" -q
+CURL_BIN="/usr/bin/curl"
+PI_SHIM="${0:A:h}/pi"
+exec "$PI_SHIM" "$@"'
+do
+  printf '#!/bin/zsh -f\n%s\n' "$body" > "$LINT_DIR/late-binding"
+  if node "$REPO_ROOT/scripts/check-launchers.mjs" --sources "$LINT_DIR/late-binding" >/dev/null 2>&1; then
+    fail "check-launchers accepted a conditional or late command binding"
+  fi
+done
 pass "launcher lint requires every exec handoff to target the protected shim"
 
 # --- 12. Pre-sandbox commands: reject known bare shells/downloaders and writable absolute helpers ---

@@ -229,26 +229,6 @@ function checkLauncher(path, { required }) {
   );
   const trustedHelperVars = new Set();
   let shimAssignments = 0;
-  for (const line of lines) {
-    const match = assignmentPattern.exec(line);
-    if (!match) continue;
-    const name = match[1];
-    const value = match[3] ?? match[4] ?? match[2];
-    if (name === 'PI_SHIM') {
-      shimAssignments += 1;
-      if (match[2] !== '"${0:A:h}/pi"') {
-        fail(`${path} assigns PI_SHIM=${match[2]}; only the sibling form "\${0:A:h}/pi" is allowed`);
-      }
-    }
-    if (name.endsWith('_BIN')) {
-      if (!isSafePreflightHelper(value)) {
-        fail(
-          `${path} assigns ${name}='${value}'; pre-sandbox helpers must be trusted and non-trampolining`,
-        );
-      }
-      trustedHelperVars.add(name);
-    }
-  }
 
   const safeArg = String.raw`(?:"[^"]*"|'[^']*'|[^\s;&|(){}<>` + '`' + String.raw`]+)`;
   const safeArgs = String.raw`(?:\s+${safeArg})*`;
@@ -261,21 +241,48 @@ function checkLauncher(path, { required }) {
   const protectedExec = new RegExp(String.raw`^exec\s+"\$PI_SHIM"${safeArgs}$`);
   let protectedExecs = 0;
 
+  let conditionalDepth = 0;
   for (const line of lines) {
+    if (line === 'fi') {
+      if (conditionalDepth === 0) fail(`${path} has an unmatched fi`);
+      else conditionalDepth -= 1;
+      continue;
+    }
+    if (line === 'else' && conditionalDepth === 0) fail(`${path} has an unmatched else`);
+    const assignment = assignmentPattern.exec(line);
+    if (assignment) {
+      const name = assignment[1];
+      const value = assignment[3] ?? assignment[4] ?? assignment[2];
+      if (name === 'PI_SHIM' || name.endsWith('_BIN')) {
+        if (conditionalDepth !== 0) {
+          fail(`${path} must bind ${name} unconditionally before use`);
+        } else if (name === 'PI_SHIM') {
+          if (assignment[2] !== '"${0:A:h}/pi"') {
+            fail(`${path} must bind PI_SHIM to the quoted sibling shim`);
+          } else shimAssignments += 1;
+        } else if (!isSafePreflightHelper(value)) {
+          fail(`${path} assigns unsafe pre-sandbox helper ${name}='${value}'`);
+        } else trustedHelperVars.add(name);
+      }
+      continue;
+    }
     if (
       line === 'set -euo pipefail' ||
       line === 'then' ||
       line === 'else' ||
-      line === 'fi' ||
       /^exit\s+[0-9]+$/.test(line) ||
       /^print(?:\s+-u2)?\s+(?:"[^"]*"|'[^']*')$/.test(line) ||
-      /^if\s+\[\s+[^;&|<>()\[\]]*\s+\]; then$/.test(line) ||
       /^(?:(?:typeset\s+-\w+\s+)?path=\([^)]*\))$/.test(line) ||
       assignmentPattern.test(line)
     ) {
       continue;
     }
+    if (/^if\s+\[\s+[^;&|<>()\[\]]*\s+\]; then$/.test(line)) {
+      conditionalDepth += 1;
+      continue;
+    }
     if (protectedExec.test(line)) {
+      if (shimAssignments === 0) fail(`${path} invokes PI_SHIM before an unconditional trusted binding`);
       protectedExecs += 1;
       continue;
     }
@@ -285,6 +292,7 @@ function checkLauncher(path, { required }) {
       if (!trustedHelperVars.has(name)) {
         fail(`${path} invokes $${name} without a trusted literal ${name}=... assignment`);
       }
+      if (variableCall[1]) conditionalDepth += 1;
       if (Boolean(variableCall[1]) !== line.endsWith('; then')) {
         fail(`${path} has a malformed helper conditional: ${line}`);
       }
@@ -300,6 +308,7 @@ function checkLauncher(path, { required }) {
       if (!isSafePreflightHelper(target)) {
         fail(`${path} invokes unsafe absolute helper '${target}' before the protected shim`);
       }
+      if (absoluteCall[1]) conditionalDepth += 1;
       if (Boolean(absoluteCall[1]) !== line.endsWith('; then')) {
         fail(`${path} has a malformed helper conditional: ${line}`);
       }
@@ -307,6 +316,7 @@ function checkLauncher(path, { required }) {
     }
     fail(`${path} contains an unsupported pre-sandbox statement: ${line}`);
   }
+  if (conditionalDepth !== 0) fail(`${path} has an unclosed conditional`);
   if (shimAssignments === 0 || protectedExecs === 0) {
     fail(`${path} does not hand off to the sibling protected pi shim via PI_SHIM="\${0:A:h}/pi"`);
   }
