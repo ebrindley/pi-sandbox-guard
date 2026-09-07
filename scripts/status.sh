@@ -91,6 +91,9 @@ fi
 
 # Guard components
 if [ "$GUARD_PRESENT" -eq 1 ]; then
+  check_pair "index.ts" \
+    "$REPO_ROOT/scripts/extension-entry.ts" \
+    "$DEST_GUARD/index.ts"
   check_pair "guard-core.mjs" \
     "$REPO_ROOT/src/guard-core.mjs" \
     "$DEST_GUARD/src/guard-core.mjs"
