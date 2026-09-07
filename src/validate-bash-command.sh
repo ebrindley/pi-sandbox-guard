@@ -3345,15 +3345,27 @@ scan_cd_relative_rm() {
                 esac
                 has_shell_expansion "$op" && continue   # handled elsewhere
                 if [[ "$op_known" == true ]]; then
-                    # Resolve the operand against the effective cwd LEXICALLY (no
-                    # symlink resolution, which would turn /etc into /private/etc
-                    # and miss the match). cd targets are absolute by construction
-                    # here (a relative cd left cwd_known=false).
-                    local joined
+                    # Check the runtime target, not the hook's original cwd.
+                    # Keep lexical intent as well as symlink-resolved containment:
+                    # a project descendant is safe, but a symlink out is not.
+                    local joined canonical safe_status
                     joined=$(lexical_normalize "$op_cwd/$op")
-                    if is_under_catastrophic_root "$joined"; then
+                    canonical=$(canonicalize_path "$op_cwd/$op")
+                    [[ -n "$canonical" ]] || { echo "ask"; return 0; }
+                    if is_catastrophic "$canonical"; then
                         echo "deny:$op (under cwd $op_cwd) → $joined"; return 0
                     fi
+                    safe_status=$(check_safe_root_status "$canonical")
+                    if [[ "$safe_status" == under ]]; then
+                        continue
+                    fi
+                    case "$safe_status" in
+                        equals_root:*) echo "ask"; return 0 ;;
+                    esac
+                    if is_under_catastrophic_root "$joined" || is_under_catastrophic_root "$canonical"; then
+                        echo "deny:$op (under cwd $op_cwd) → $canonical"; return 0
+                    fi
+                    echo "ask"; return 0
                 else
                     # cwd changed to something we cannot resolve; a ..-traversal
                     # operand could escape to anywhere -> fail safe.
@@ -3379,7 +3391,7 @@ if [ "${NOSYNC_OVERSIZED_NO_RM:-0}" != "1" ]; then
             ;;
         ask)
             log_security_event "ASK" "cd_relative_path_dynamic" "$command"
-            echo "⚠️  CONFIRMATION REQUIRED: destructive relative path after a cwd change that cannot be resolved" >&2
+            echo "⚠️  CONFIRMATION REQUIRED: destructive relative path after a cwd change is not a confirmed safe-root descendant" >&2
             echo "   Command: $command" >&2
             exit 1
             ;;
@@ -3714,8 +3726,8 @@ if [ "${NOSYNC_OVERSIZED_NO_RM:-0}" != "1" ] && has_rf_flags "$normalized_cmd"; 
                 exit 1
                 ;;
             allow)
-                # Allowed - proceed silently
-                exit 0
+                # Only rm passed. Other segments still need the rules below.
+                :
                 ;;
         esac
     fi
