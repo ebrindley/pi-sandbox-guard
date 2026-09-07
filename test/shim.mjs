@@ -9,6 +9,7 @@ import { createHash } from 'node:crypto';
 import {
   chmodSync,
   copyFileSync,
+  existsSync,
   mkdtempSync,
   mkdirSync,
   readFileSync,
@@ -54,6 +55,16 @@ function nativeCheck(name, fn) {
 
 function policyIdFor(profilePath) {
   return createHash('sha256').update(readFileSync(profilePath)).digest('hex');
+}
+
+// Exercise pre-sandbox startup blocks with controlled directory-service output
+// without changing the host account or adding a production override.
+function startupBlock(start, end) {
+  const source = readFileSync(preamble, 'utf8');
+  const from = source.indexOf(start);
+  const to = source.indexOf(end, from);
+  assert.ok(from >= 0 && to > from, 'startup block boundaries must exist');
+  return source.slice(from, to);
 }
 
 function canApplySandbox() {
@@ -155,6 +166,55 @@ function baseEnv(fx, extraEnv = {}) {
     ...extraEnv,
   };
 }
+
+check('home lookup preserves spaces and fails closed on unavailable or invalid records', () => {
+  const fx = fixture();
+  const spacedHome = join(fx.root, 'home with spaces');
+  mkdirSync(spacedHome);
+  const dscl = join(fx.root, 'dscl');
+  writeFileSync(dscl, '#!/bin/zsh -f\nprint -r -- "$HOME_RECORD"\nexit "$HOME_LOOKUP_STATUS"\n');
+  chmodSync(dscl, 0o755);
+  const block = startupBlock('if [ -z "$LOGIN_USER" ] || ! REAL_HOME=', '# HOME is now');
+  for (const [record, status, allowed] of [
+    [`NFSHomeDirectory: ${spacedHome}`, '0', true],
+    [`NFSHomeDirectory: ${spacedHome}`, '1', false],
+    ['NFSHomeDirectory: /nonexistent-guard-home', '0', false],
+    [`NFSHomeDirectory: ${spacedHome}\n /second-home`, '0', false],
+    ['', '0', false],
+  ]) {
+    const r = spawnSync('/bin/zsh', ['-f', '-c',
+      `emit() { print -u2 -- "$*"; }\nLOGIN_USER=fixture\nDSCL_BIN="$1"\n${block}\nprint -r -- "$HOME"`, '_', dscl], {
+      encoding: 'utf8',
+      env: baseEnv(fx, { HOME_RECORD: record, HOME_LOOKUP_STATUS: status }),
+    });
+    if (allowed) {
+      assert.equal(r.status, 0, r.stderr);
+      assert.equal(r.stdout.trim(), spacedHome);
+    } else {
+      assert.notEqual(r.status, 0, `must refuse record ${JSON.stringify(record)} with status ${status}`);
+      assert.match(r.stderr, /refusing ambient HOME/);
+    }
+  }
+});
+
+check('profile hashing ignores Perl startup hooks without removing caller settings', () => {
+  const fx = fixture();
+  const marker = join(fx.root, 'perl-startup-ran');
+  writeFileSync(join(fx.root, 'GuardStartupProbe.pm'),
+    'package GuardStartupProbe; BEGIN { open(my $fh, ">", $ENV{GUARD_PERL_MARKER}) or die $!; print $fh "ran"; close($fh); } 1;\n');
+  const block = startupBlock('PROFILE="$PI_SANDBOX_PROFILE"', '\nACTUAL_CONFINEMENT=0');
+  const r = spawnSync('/bin/zsh', ['-f', '-c',
+    `SHASUM_BIN=/usr/bin/shasum\nAWK_BIN=/usr/bin/awk\n${block}\nprint -r -- "$EXPECTED_PROFILE_DIGEST" "$PERL5OPT" "$PERL5LIB"`], {
+    encoding: 'utf8',
+    env: baseEnv(fx, {
+      PI_SANDBOX_PROFILE: fx.profileCopy,
+      PERL5OPT: '-MGuardStartupProbe', PERL5LIB: fx.root, GUARD_PERL_MARKER: marker,
+    }),
+  });
+  assert.equal(r.status, 0, r.stderr);
+  assert.equal(existsSync(marker), false, 'Perl startup module must not execute before sandboxing');
+  assert.equal(r.stdout.trim(), `${policyIdFor(fx.profileCopy)} -MGuardStartupProbe ${fx.root}`);
+});
 
 function runShim(fx, extraEnv = {}, args = ['hello']) {
   return spawnSync(fx.shim, args, {
@@ -681,11 +741,12 @@ check('TMPDIR=$HOME is refused', () => {
   assert.ok(login, 'id -un must work');
   const dscl = spawnSync(
     '/usr/bin/dscl',
-    ['.', '-read', `/Users/${login}`, 'NFSHomeDirectory'],
+    ['/Search', '-read', `/Users/${login}`, 'NFSHomeDirectory'],
     { encoding: 'utf8' },
   );
-  const match = /NFSHomeDirectory:\s*(\S+)/.exec(dscl.stdout || '');
-  const realHome = match ? match[1] : process.env.HOME;
+  assert.equal(dscl.status, 0, dscl.stderr);
+  const match = /^NFSHomeDirectory: (\/[^\n]+)\n?$/.exec(dscl.stdout || '');
+  const realHome = match?.[1];
   assert.ok(realHome && realHome.startsWith('/'), `real home resolved: ${realHome}`);
 
   const r = runTmpdirSelftest(fx, realHome);
