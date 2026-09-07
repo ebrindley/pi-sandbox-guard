@@ -176,12 +176,7 @@ ops_require_same_hash "index.mjs" "$SRC_ADAPTER" "$STAGE/src/index.mjs"
 ops_require_same_hash "src/validate-bash-command.sh" "$SRC_ANALYZER" "$STAGE/src/validate-bash-command.sh"
 
 # One-line .ts shim: Pi auto-discovers .ts; its loader imports the sibling .mjs.
-cat > "$STAGE/index.ts" <<'TS'
-// pi-sandbox-guard — deployed extension entry (auto-discovered by Pi).
-// Pi globs *.ts for discovery; its jiti loader imports the .mjs adapter below.
-// This is a self-contained COPY: it does not reference the source git repo.
-export { default } from "./src/index.mjs";
-TS
+cp "$REPO_ROOT/scripts/extension-entry.ts" "$STAGE/index.ts"
 
 # Provenance stamp: release_id + git + local component hashes (not upstream claims).
 if [ -z "$RELEASE_ID" ]; then
@@ -270,6 +265,7 @@ chmod +x "$DEST/src/validate-bash-command.sh" 2>/dev/null || true
 
 # Post-install integrity: installed hashes must still match source.
 ops_require_same_hash "installed guard-core.mjs" "$SRC_CORE" "$DEST/src/guard-core.mjs"
+ops_require_same_hash "installed index.ts" "$REPO_ROOT/scripts/extension-entry.ts" "$DEST/index.ts"
 ops_require_same_hash "installed index.mjs" "$SRC_ADAPTER" "$DEST/src/index.mjs"
 ops_require_same_hash "installed analyzer" "$SRC_ANALYZER" "$DEST/src/validate-bash-command.sh"
 [ "$(cat "$DEST/.guard-node")" = "$GUARD_NODE" ] \

@@ -157,6 +157,18 @@ then
   node -e 'JSON.parse(require("fs").readFileSync(process.argv[1], "utf8"))' \
     "$WORKDIR/status.json" \
     || fail "status --json emitted invalid JSON"
+  # Discovery entry is executable deployment content, even though generated.
+  mv "$GUARD_DEST/index.ts" "$WORKDIR/index.ts.saved"
+  if bash "$REPO_ROOT/scripts/status.sh" --dest-guard "$GUARD_DEST" \
+    --dest-launchers "$LAUNCHERS_DEST" >/dev/null 2>&1; then
+    fail "status missed missing discovery entry"
+  fi
+  printf 'export default () => {};\n' > "$GUARD_DEST/index.ts"
+  if bash "$REPO_ROOT/scripts/status.sh" --dest-guard "$GUARD_DEST" \
+    --dest-launchers "$LAUNCHERS_DEST" >/dev/null 2>&1; then
+    fail "status missed tampered discovery entry"
+  fi
+  mv "$WORKDIR/index.ts.saved" "$GUARD_DEST/index.ts"
   # Tamper detection: corrupt installed analyzer and expect status drift
   printf 'TAMPER\n' >> "$GUARD_DEST/src/validate-bash-command.sh"
   if bash "$REPO_ROOT/scripts/status.sh" \
