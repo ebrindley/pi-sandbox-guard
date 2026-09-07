@@ -3144,6 +3144,7 @@ scan_cd_relative_rm() {
     [[ "$depth" -gt 4 ]] && { echo "ask"; return 0; }
 
     local eff_cwd="$initial_cwd" cwd_known=true cwd_changed=false seg
+    local rm_caches_ready=false
     local cwd_stack=() known_stack=() changed_stack=() stack_i
     local group_cwd_stack=() group_known_stack=() group_changed_stack=()
     local seg_base_cwd="$initial_cwd" seg_base_known=true seg_base_changed=false
@@ -3339,21 +3340,62 @@ scan_cd_relative_rm() {
         if [[ "$op_changed" == true ]] && has_rf_flags "$seg"; then
             local ops=() op
             while IFS= read -r op; do [[ -n "$op" ]] && ops+=("$op"); done < <(parse_rm_operands "$seg")
+            # Match validate_rm_rf's bounded work and cache lifetime. A command
+            # substitution inherits warmed caches but cannot populate its caller's.
+            local max_rm_operands="${CLAUDE_BASH_GUARD_MAX_RM_OPERANDS:-32}"
+            if [[ ${#ops[@]} -gt $max_rm_operands ]]; then
+                for op in "${ops[@]}"; do
+                    has_shell_expansion "$op" && continue
+                    case "$op" in
+                        /*) lexical_normalize_into "$op" ;;
+                        "~"|"~"/*) lexical_normalize_into "${op/#\~/$HOME}" ;;
+                        *) [[ "$op_known" == true ]] || continue
+                           lexical_normalize_into "$op_cwd/$op"
+                           # Relative project paths under /Users are not system
+                           # paths. Preserve hard denial for critical targets.
+                           if is_literal_critical_system_path "$_lexical_result" || [[ "$_lexical_result" == / || "$_lexical_result" == "$HOME" ]]; then
+                               echo "deny:$op (operand count exceeds $max_rm_operands)"; return 0
+                           fi
+                           continue ;;
+                    esac
+                    if is_under_catastrophic_root "$_lexical_result"; then
+                        echo "deny:$op (operand count exceeds $max_rm_operands)"; return 0
+                    fi
+                done
+                echo "ask"; return 0
+            fi
+            if [[ "$rm_caches_ready" == false ]]; then
+                _NOSYNC_HOME_CANON_CACHED="$(canonicalize_path "$HOME")"; _NOSYNC_HOME_CANON_DONE=1
+                build_safe_roots_canon
+                rm_caches_ready=true
+            fi
             for op in "${ops[@]}"; do
                 case "$op" in
                     /*|"~"|"~"/*) continue ;;   # absolute: normal path handles it
                 esac
                 has_shell_expansion "$op" && continue   # handled elsewhere
                 if [[ "$op_known" == true ]]; then
-                    # Resolve the operand against the effective cwd LEXICALLY (no
-                    # symlink resolution, which would turn /etc into /private/etc
-                    # and miss the match). cd targets are absolute by construction
-                    # here (a relative cd left cwd_known=false).
-                    local joined
+                    # Check the runtime target, not the hook's original cwd.
+                    # Keep lexical intent as well as symlink-resolved containment:
+                    # a project descendant is safe, but a symlink out is not.
+                    local joined canonical safe_status
                     joined=$(lexical_normalize "$op_cwd/$op")
-                    if is_under_catastrophic_root "$joined"; then
+                    canonical=$(canonicalize_path "$op_cwd/$op")
+                    [[ -n "$canonical" ]] || { echo "ask"; return 0; }
+                    if is_catastrophic "$canonical"; then
                         echo "deny:$op (under cwd $op_cwd) → $joined"; return 0
                     fi
+                    safe_status=$(check_safe_root_status "$canonical")
+                    if [[ "$safe_status" == under ]]; then
+                        continue
+                    fi
+                    case "$safe_status" in
+                        equals_root:*) echo "ask"; return 0 ;;
+                    esac
+                    if is_under_catastrophic_root "$joined" || is_under_catastrophic_root "$canonical"; then
+                        echo "deny:$op (under cwd $op_cwd) → $canonical"; return 0
+                    fi
+                    echo "ask"; return 0
                 else
                     # cwd changed to something we cannot resolve; a ..-traversal
                     # operand could escape to anywhere -> fail safe.
@@ -3379,7 +3421,7 @@ if [ "${NOSYNC_OVERSIZED_NO_RM:-0}" != "1" ]; then
             ;;
         ask)
             log_security_event "ASK" "cd_relative_path_dynamic" "$command"
-            echo "⚠️  CONFIRMATION REQUIRED: destructive relative path after a cwd change that cannot be resolved" >&2
+            echo "⚠️  CONFIRMATION REQUIRED: destructive relative path after a cwd change is not a confirmed safe-root descendant" >&2
             echo "   Command: $command" >&2
             exit 1
             ;;
@@ -3714,8 +3756,12 @@ if [ "${NOSYNC_OVERSIZED_NO_RM:-0}" != "1" ] && has_rf_flags "$normalized_cmd"; 
                 exit 1
                 ;;
             allow)
-                # Allowed - proceed silently
-                exit 0
+                # A lone rm is done: its operand names are not commands for the
+                # flat warning patterns below. Compound commands still need them.
+                if ! is_compound_command "$normalized_cmd"; then
+                    IFS= read -r first_rm_word < <(tokenize_command "$normalized_cmd")
+                    case "$first_rm_word" in rm|*/rm) exit 0 ;; esac
+                fi
                 ;;
         esac
     fi

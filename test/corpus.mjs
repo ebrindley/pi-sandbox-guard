@@ -18,7 +18,7 @@
 //     the docs can never silently go stale again.
 
 import assert from 'node:assert/strict';
-import { readFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync } from 'node:fs';
+import { readFileSync, mkdtempSync, mkdirSync, rmSync, writeFileSync, symlinkSync } from 'node:fs';
 import { tmpdir, homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -79,6 +79,8 @@ async function main() {
   execFileSync('git', ['init', '-q', REPO]);
   mkdirSync(join(REPO, 'build'), { recursive: true });
   writeFileSync(join(REPO, 'build', 'artifact.txt'), 'x\n');
+  mkdirSync(join(REPO, 'packages', 'web', 'dist'), { recursive: true });
+  symlinkSync('/etc', join(REPO, 'packages', 'web', 'critical-link'));
 
   const resolvePlaceholders = (s) => s.replaceAll('{TMP}', TMP).replaceAll('{REPO}', REPO);
 
@@ -91,7 +93,7 @@ async function main() {
   for (const c of cases) {
     const command = resolvePlaceholders(c.command);
     const cwd = resolvePlaceholders(c.cwd || '{TMP}');
-    const v = await analyzeCommand(command, { cwd, timeoutMs: 5000, home: process.env.HOME });
+    const v = await analyzeCommand(command, { cwd, timeoutMs: c.timeoutMs ?? 5000, home: process.env.HOME });
 
     // Platform-conditional expectation: some analyzer verdicts are
     // genuinely OS-dependent (e.g. the /Users/* blanket catastrophic rule only
