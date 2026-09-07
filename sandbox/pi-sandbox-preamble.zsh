@@ -84,14 +84,23 @@ fi
 # Bind HOME to the login user's real macOS home before deriving config/profile
 # paths. A repo-local env or wrapper must not make Seatbelt params point at a
 # fake home and thereby miss real credential/config paths.
-REAL_HOME=""
-if [ -n "$LOGIN_USER" ]; then
-  REAL_HOME="$("$DSCL_BIN" . -read "/Users/$LOGIN_USER" NFSHomeDirectory 2>/dev/null | "$AWK_BIN" '{print $2; exit}' || true)"
+if [ -z "$LOGIN_USER" ] || ! REAL_HOME="$("$DSCL_BIN" /Search -read "/Users/$LOGIN_USER" NFSHomeDirectory 2>/dev/null)"; then
+  emit "cannot resolve login user's home; refusing ambient HOME."
+  exit 1
 fi
-if [ -n "$REAL_HOME" ] && [ -d "$REAL_HOME" ]; then
-  HOME="$REAL_HOME"
-  export HOME
+# Preserve spaces in the attribute value; reject missing, multi-valued, or
+# malformed records instead of silently retaining an inherited HOME.
+case "$REAL_HOME" in
+  "NFSHomeDirectory: /"*) REAL_HOME="${REAL_HOME#NFSHomeDirectory: }" ;;
+  $'NFSHomeDirectory:\n /'*) REAL_HOME="${REAL_HOME#$'NFSHomeDirectory:\n '}" ;;
+  *) emit "invalid login home record; refusing ambient HOME."; exit 1 ;;
+esac
+if [[ "$REAL_HOME" == *$'\n'* ]] || [ "$REAL_HOME" = / ] || [ ! -d "$REAL_HOME" ]; then
+  emit "unavailable or invalid login home; refusing ambient HOME."
+  exit 1
 fi
+HOME="$REAL_HOME"
+export HOME
 typeset -r REAL_HOME
 
 # HOME is now the kernel-derived real home (above). Canonicalize it HERE, before any
@@ -861,7 +870,9 @@ fi
 PROFILE="$PI_SANDBOX_PROFILE"
 EXPECTED_PROFILE_DIGEST=""
 if [ -f "$PROFILE" ] && [ -x "$SHASUM_BIN" ]; then
-  EXPECTED_PROFILE_DIGEST="$("$SHASUM_BIN" -a 256 "$PROFILE" 2>/dev/null | "$AWK_BIN" '{print $1; exit}' || true)"
+  # macOS shasum is a Perl script. Its startup environment must not run code
+  # before Seatbelt applies; keep the caller's Perl settings for Pi itself.
+  EXPECTED_PROFILE_DIGEST="$(unset -m 'PERL*' || true; "$SHASUM_BIN" -a 256 "$PROFILE" 2>/dev/null | "$AWK_BIN" '{print $1; exit}' || true)"
 fi
 
 ACTUAL_CONFINEMENT=0
