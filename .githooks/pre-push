@@ -118,7 +118,15 @@ else
   gate_label="fast checks"
 fi
 
-if ! "${gate_cmd[@]}"; then
+if ! (
+  # Git exports repository-local variables into hooks. Tests create disposable
+  # repos; inherited GIT_DIR would make their git init/config target this repo.
+  # Clear only Git's local environment, in the test subprocess alone.
+  for git_local_var in $(git rev-parse --local-env-vars); do
+    unset "$git_local_var"
+  done
+  "${gate_cmd[@]}"
+); then
   echo ""
   echo "Error: BLOCKED: $gate_label failed; fix before pushing."
   echo "   Override (emergency only): SKIP_PREPUSH_TESTS=1 git push"
