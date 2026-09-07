@@ -3144,6 +3144,7 @@ scan_cd_relative_rm() {
     [[ "$depth" -gt 4 ]] && { echo "ask"; return 0; }
 
     local eff_cwd="$initial_cwd" cwd_known=true cwd_changed=false seg
+    local rm_caches_ready=false
     local cwd_stack=() known_stack=() changed_stack=() stack_i
     local group_cwd_stack=() group_known_stack=() group_changed_stack=()
     local seg_base_cwd="$initial_cwd" seg_base_known=true seg_base_changed=false
@@ -3339,6 +3340,29 @@ scan_cd_relative_rm() {
         if [[ "$op_changed" == true ]] && has_rf_flags "$seg"; then
             local ops=() op
             while IFS= read -r op; do [[ -n "$op" ]] && ops+=("$op"); done < <(parse_rm_operands "$seg")
+            # Match validate_rm_rf's bounded work and cache lifetime. A command
+            # substitution inherits warmed caches but cannot populate its caller's.
+            local max_rm_operands="${CLAUDE_BASH_GUARD_MAX_RM_OPERANDS:-32}"
+            if [[ ${#ops[@]} -gt $max_rm_operands ]]; then
+                for op in "${ops[@]}"; do
+                    has_shell_expansion "$op" && continue
+                    case "$op" in
+                        /*) lexical_normalize_into "$op" ;;
+                        "~"|"~"/*) lexical_normalize_into "${op/#\~/$HOME}" ;;
+                        *) [[ "$op_known" == true ]] || continue
+                           lexical_normalize_into "$op_cwd/$op" ;;
+                    esac
+                    if is_under_catastrophic_root "$_lexical_result"; then
+                        echo "deny:$op (operand count exceeds $max_rm_operands)"; return 0
+                    fi
+                done
+                echo "ask"; return 0
+            fi
+            if [[ "$rm_caches_ready" == false ]]; then
+                _NOSYNC_HOME_CANON_CACHED="$(canonicalize_path "$HOME")"; _NOSYNC_HOME_CANON_DONE=1
+                build_safe_roots_canon
+                rm_caches_ready=true
+            fi
             for op in "${ops[@]}"; do
                 case "$op" in
                     /*|"~"|"~"/*) continue ;;   # absolute: normal path handles it
@@ -3726,8 +3750,9 @@ if [ "${NOSYNC_OVERSIZED_NO_RM:-0}" != "1" ] && has_rf_flags "$normalized_cmd"; 
                 exit 1
                 ;;
             allow)
-                # Only rm passed. Other segments still need the rules below.
-                :
+                # A lone rm is done: its operand names are not commands for the
+                # flat warning patterns below. Compound commands still need them.
+                is_compound_command "$normalized_cmd" || exit 0
                 ;;
         esac
     fi

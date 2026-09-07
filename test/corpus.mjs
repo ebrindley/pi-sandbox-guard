@@ -93,7 +93,7 @@ async function main() {
   for (const c of cases) {
     const command = resolvePlaceholders(c.command);
     const cwd = resolvePlaceholders(c.cwd || '{TMP}');
-    const v = await analyzeCommand(command, { cwd, timeoutMs: 5000, home: process.env.HOME });
+    const v = await analyzeCommand(command, { cwd, timeoutMs: c.timeoutMs ?? 5000, home: process.env.HOME });
 
     // Platform-conditional expectation: some analyzer verdicts are
     // genuinely OS-dependent (e.g. the /Users/* blanket catastrophic rule only
