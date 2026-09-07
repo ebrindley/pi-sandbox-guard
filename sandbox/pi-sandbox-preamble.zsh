@@ -92,6 +92,7 @@ fi
 # malformed records instead of silently retaining an inherited HOME.
 case "$REAL_HOME" in
   "NFSHomeDirectory: /"*) REAL_HOME="${REAL_HOME#NFSHomeDirectory: }" ;;
+  $'NFSHomeDirectory:\n /'*) REAL_HOME="${REAL_HOME#$'NFSHomeDirectory:\n '}" ;;
   *) emit "invalid login home record; refusing ambient HOME."; exit 1 ;;
 esac
 if [[ "$REAL_HOME" == *$'\n'* ]] || [ "$REAL_HOME" = / ] || [ ! -d "$REAL_HOME" ]; then

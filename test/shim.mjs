@@ -177,9 +177,11 @@ check('home lookup preserves spaces and fails closed on unavailable or invalid r
   const block = startupBlock('if [ -z "$LOGIN_USER" ] || ! REAL_HOME=', '# HOME is now');
   for (const [record, status, allowed] of [
     [`NFSHomeDirectory: ${spacedHome}`, '0', true],
+    [`NFSHomeDirectory:\n ${spacedHome}`, '0', true],
     [`NFSHomeDirectory: ${spacedHome}`, '1', false],
     ['NFSHomeDirectory: /nonexistent-guard-home', '0', false],
     [`NFSHomeDirectory: ${spacedHome}\n /second-home`, '0', false],
+    [`NFSHomeDirectory:\n ${spacedHome}\n /second-home`, '0', false],
     ['', '0', false],
   ]) {
     const r = spawnSync('/bin/zsh', ['-f', '-c',
@@ -745,7 +747,7 @@ check('TMPDIR=$HOME is refused', () => {
     { encoding: 'utf8' },
   );
   assert.equal(dscl.status, 0, dscl.stderr);
-  const match = /^NFSHomeDirectory: (\/[^\n]+)\n?$/.exec(dscl.stdout || '');
+  const match = /^NFSHomeDirectory:(?: |\n )(\/[^\n]+)\n?$/.exec(dscl.stdout || '');
   const realHome = match?.[1];
   assert.ok(realHome && realHome.startsWith('/'), `real home resolved: ${realHome}`);
 
