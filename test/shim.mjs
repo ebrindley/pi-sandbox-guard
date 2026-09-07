@@ -103,7 +103,14 @@ function fixture() {
   mkdirSync(guardExtensionDir);
   writeFileSync(join(guardExtensionDir, 'index.ts'), 'export default function () {}\n');
   const preambleCopy = join(shimDir, 'pi-sandbox-preamble.zsh');
-  copyFileSync(preamble, preambleCopy);
+  // Keep the protected, non-ambient config selection while isolating tests from
+  // the operator's installed bindings (which may refer to an older Node).
+  const protectedConfig = '$HOME/.config/pi-sandbox-guard/executables.conf';
+  const preambleSource = readFileSync(preamble, 'utf8');
+  assert.ok(preambleSource.includes(protectedConfig), 'protected config path must exist');
+  const fixtureConfig = join(root, 'host-executables.conf');
+  writeFileSync(fixtureConfig, '');
+  writeFileSync(preambleCopy, preambleSource.replaceAll(protectedConfig, fixtureConfig));
   const profileCopy = join(shimDir, 'pi-sandbox.sb');
   copyFileSync(profile, profileCopy);
 
