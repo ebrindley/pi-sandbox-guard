@@ -41,12 +41,20 @@ checkout.
 ## Scope
 
 Writes and deletes outside your project are blocked at the kernel, bar an
-allow-list (temp dirs, tool caches, and agent runtime state). Pi config/auth and
-both agents' extensions stay protected. OMP gets a positive state allowlist:
+allow-list (temp dirs, tool caches, and agent runtime state). Pi config/auth,
+user package stores, system prompts and skills stay protected, as do both
+agents' extensions. Pi theme files remain writable. OMP gets a positive state allowlist:
 sessions and operational databases work, while plugins, hooks, tools, prompts,
 rules, and configuration remain read-only. OMP's `agent.db` mixes runtime and
 auth data, so it remains writable; this is an explicit OMP limitation.
 Selected credential paths are read-denied.
+
+Pi package maintenance and edits to global system prompts, skills or
+`models.json` require an operator session outside the guard. Use the real Pi
+binary for package maintenance, then return to the protected launcher. Packages
+must already be installed: startup/reload cannot install missing packages into
+the protected stores. Reads and use of existing resources still work; saving
+model/theme choices to `settings.json` was already restricted.
 
 Project agent config is write-protected too: any `.pi` or `.omp` folder in
 your project, plus the extension, plugin, hook, and tool folders OMP loads from

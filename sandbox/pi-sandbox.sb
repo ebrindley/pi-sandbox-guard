@@ -30,8 +30,8 @@
 ;;    fixtures, *.pem under the repo) stay READABLE. (.env is the one project-wide deny.)
 ;;  - ~/.npm + ~/.cache are writable so npm/pip/uv/playwright work; the launcher sets
 ;;    NPM_CONFIG_USERCONFIG=/dev/null so npm never needs to read ~/.npmrc.
-;;  - ~/.pi/agent/extensions is NOT writable -> the sandboxed process cannot disable
-;;    the deployed guard. Only ~/.pi/agent/sessions is writable (session persistence).
+;;  - Pi extensions, package stores, system prompts, model config and skills are
+;;    read-only. Operational state and theme data remain writable.
 
 (version 1)
 (allow default)
@@ -172,6 +172,14 @@
   (literal (string-append (param "PI_AGENT_STATE") "/settings.json"))
   (literal (string-append (param "PI_AGENT_STATE") "/auth.json"))
   (literal (string-append (param "PI_AGENT_STATE") "/trust.json"))
+  ;; User-level code and instructions persist across projects. Cover the active
+  ;; state root, including supported PI_CODING_AGENT_DIR relocation.
+  (subpath (string-append (param "PI_AGENT_STATE") "/npm"))
+  (subpath (string-append (param "PI_AGENT_STATE") "/git"))
+  (subpath (string-append (param "PI_AGENT_STATE") "/skills"))
+  (literal (string-append (param "PI_AGENT_STATE") "/SYSTEM.md"))
+  (literal (string-append (param "PI_AGENT_STATE") "/APPEND_SYSTEM.md"))
+  (literal (string-append (param "PI_AGENT_STATE") "/models.json"))
   ;; The shared extension remains at the canonical Pi path even when Pi runtime
   ;; state is relocated. Keep these denies pinned as well as state-relative.
   (subpath (string-append (param "HOME") "/.pi/agent/extensions"))

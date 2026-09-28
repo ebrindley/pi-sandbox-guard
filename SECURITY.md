@@ -35,6 +35,16 @@ and catches some catastrophic literal bash forms; it is **not** the fail-safe.
 How both layers work, their invariants, and known analyzer gaps:
 [docs/ARCHITECTURE.md](docs/ARCHITECTURE.md).
 
+The active Pi state directory write-protects `npm/`, `git/`, `skills/`,
+`SYSTEM.md`, `APPEND_SYSTEM.md` and `models.json`, in addition to existing
+configuration/auth and extension protection. This covers default and supported
+relocated state. Configured packages can load code, prompts/skills supply
+instructions, and model configuration can resolve command-backed values.
+Theme JSON remains writable. These file protections do not guarantee the
+integrity of arbitrary loaded code or change the confidentiality scope below.
+Package maintenance and edits to these global resources require an operator
+session outside the guard; see [maintenance limits](docs/ARCHITECTURE.md#known-limitations-need-an-unsandboxed-direct-agent-run).
+
 ## Explicit non-goals (current scope)
 
 The following are **outside current scope** by design, not unfinished checkboxes:
