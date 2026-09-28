@@ -1004,6 +1004,15 @@ case "$PROJECT" in
     emit "refusing unsafe boundary '$PROJECT' (broad/system/credential path)."
     emit "cd into a project directory or set PI_PROJECT=<dir>; call the real Pi binary directly to bypass."; exit 1 ;;
 esac
+# The profile write-denies any .pi/.omp path component under PROJECT (project
+# agent config). A PROJECT that itself sits inside such a folder (for example an
+# OMP-managed worktree under ~/.omp/wt) would be denied wholesale, so refuse it
+# clearly instead of launching into a read-only project.
+case "$PROJECT" in
+  */.pi|*/.pi/*|*/.omp|*/.omp/*)
+    emit "refusing boundary '$PROJECT': it is inside a .pi/.omp config folder, which the sandbox write-protects."
+    emit "cd into a project directory or set PI_PROJECT=<dir>; call the real Pi binary directly to bypass."; exit 1 ;;
+esac
 
 ACTIVE_HOOKS="$(resolve_active_hooks "$PROJECT")" || exit 1
 TMPDIR_CANON="$(canonical_safe_tmpdir "${TMPDIR:-/tmp}")" || exit 1

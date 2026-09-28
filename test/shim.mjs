@@ -905,6 +905,17 @@ nativeCheck('full launch still succeeds when the target is outside PROJECT', () 
   assert.match(r.stdout, /outside-ok/);
 });
 
+nativeCheck('full launch refuses a PROJECT inside a write-protected .omp folder', () => {
+  // The profile denies every .pi/.omp path component under PROJECT, so a project
+  // inside one (e.g. an OMP worktree) would launch read-only; refuse it instead.
+  const fx = fixture();
+  const proj = join(bindableDir(), '.omp', 'wt', 'repo');
+  mkdirSync(proj, { recursive: true });
+  const r = runShim(fx, { PI_EXECUTABLE: TRUSTED_ECHO, PI_PROJECT: proj }, ['x']);
+  assert.notEqual(r.status, 0, 'a PROJECT inside .omp must not launch');
+  assert.match(r.stderr, /inside a \.pi\/\.omp config folder/);
+});
+
 nativeCheck('shared launcher selects OMP and injects the protected extension', () => {
   const fx = fixture();
   const r = runOmpShim(fx, {}, ['omp-ok']);
