@@ -484,8 +484,11 @@ since the launch cwd can be a subdirectory:
   `.gemini/extensions`, `.opencode/plugins`
 
 The match is a PROJECT-scoped `subpath` AND a static component regex, like the
-submodule hooks rule. The launcher refuses a PROJECT whose own path has a `.pi`
-or `.omp` component, which the regex would otherwise deny wholesale. Plain
+submodule hooks rule. The launcher refuses a PROJECT whose own path has any
+protected component, which the regex would otherwise deny wholesale. Because
+Seatbelt checks resolved paths, it also refuses a symlinked `.pi`/`.omp` under
+PROJECT or the launch cwd, or a link inside one that resolves to a writable
+location outside that folder. Plain
 context (`AGENTS.md`, `CLAUDE.md`, `.agents/skills`, rules) stays writable. The
 user-facing limit: agents cannot edit project `.pi`/`.omp` config, including
 `pi install -l` or project-scoped `/settings` changes through the shim; edit it

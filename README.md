@@ -53,6 +53,8 @@ your project, plus the extension, plugin, hook, and tool folders OMP loads from
 `.claude`, `.codex`, `.gemini`, and `.opencode`. Agents cannot create, edit,
 or delete them, because they run at the next start. Edit them yourself.
 Plain context files such as `AGENTS.md` and skills in `.agents` stay editable.
+The launcher refuses to start inside any of these protected folders, and
+refuses a symlinked `.pi`/`.omp` layout that would leave the config writable.
 
 **Not protected:** files inside your project (the agent edits code, so review
 diffs), network egress, and credentials already in your shell env. `git push

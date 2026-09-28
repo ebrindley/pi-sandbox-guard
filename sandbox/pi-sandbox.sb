@@ -157,8 +157,9 @@
   ;; into or away from it, and planting a symlink there are all denied.
   ;; Same technique as the submodule hooks deny: PROJECT-scoped subpath AND a
   ;; static component regex (never a PROJECT-interpolated regex). The launcher
-  ;; refuses a PROJECT whose own path has a .pi/.omp component, which these
-  ;; regexes would otherwise match wholesale.
+  ;; refuses a PROJECT whose own path has any of these components, which these
+  ;; regexes would otherwise match wholesale, and symlinked .pi/.omp layouts.
+  ;; Keep these regexes in step with the PROJECT refusal patterns in pi-sandbox-preamble.zsh.
   (require-all
     (subpath (param "PROJECT"))
     (require-any
