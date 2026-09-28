@@ -488,7 +488,9 @@ submodule hooks rule. The launcher refuses a PROJECT whose own path has any
 protected component, which the regex would otherwise deny wholesale. Because
 Seatbelt checks resolved paths, it also refuses a symlinked `.pi`/`.omp` under
 PROJECT or the launch cwd, or a link inside one that resolves to a writable
-location outside that folder. Plain
+location outside that folder. The check treats each writable root as a whole,
+so a link to a re-denied spot inside one (for example
+`~/.pi/agent/extensions`) is refused too; copy the files instead. Plain
 context (`AGENTS.md`, `CLAUDE.md`, `.agents/skills`, rules) stays writable. The
 user-facing limit: agents cannot edit project `.pi`/`.omp` config, including
 `pi install -l` or project-scoped `/settings` changes through the shim; edit it
