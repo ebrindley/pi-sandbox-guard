@@ -167,6 +167,7 @@ esac
 if ops_path_is_known_sandbox_write_root "$GUARD_NODE" "$HOME" "$REPO_ROOT"; then
   die "node process.execPath is inside a sandbox-writable root: $GUARD_NODE"
 fi
+GUARD_NODE="$(ops_stable_node_path "$GUARD_NODE")"
 printf '%s\n' "$GUARD_NODE" > "$STAGE/.guard-node"
 chmod 600 "$STAGE/.guard-node"
 

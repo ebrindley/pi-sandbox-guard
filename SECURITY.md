@@ -69,6 +69,14 @@ write, that file can be replaced after startup and later canonicalizations would
 run the replacement, which could report attacker-chosen paths and cause a
 destructive command to be misclassified as safe.
 
+Homebrew Node pins use its absolute formula-specific `opt` link when that link
+resolves to the selected Cellar executable at bind/deploy time. Homebrew may
+advance that link during an operator upgrade. The protected launcher resolves
+both Node bindings and checks their current targets against writable roots on
+each launch. This preserves the trusted-interpreter model above: no runtime
+PATH lookup or interpreter integrity guarantee is added. Non-Homebrew installs
+retain resolved executable pins.
+
 The protected launcher rejects a pinned Node path under its active `PROJECT`,
 `TMPDIR`, Pi/OMP state, or the fixed writable cache roots. Filter-only use has
 no launcher check. `PROJECT` is not the only

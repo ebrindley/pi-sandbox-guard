@@ -147,8 +147,14 @@ npm run bind -- --pi /abs/path/to/pi --omp /abs/path/to/omp --node /abs/path/to/
 ```
 
 Binding records an absolute path in `~/.config/pi-sandbox-guard/executables.conf`.
-Re-run it after an upgrade that moves the path (a Node version bump under
-nvm/volta/mise, or a `brew upgrade`); a stale binding **fails closed** with the
+Homebrew Node bindings use the stable `opt/node` or `opt/node@<major>` path when
+it resolves to the selected executable. This applies to both `executables.conf`
+and the deployed extension's `.guard-node`, so a formula version upgrade does
+not require rebinding or redeploying for Node. Existing Cellar pins need one rebind and
+redeploy to adopt this behavior. Switching formulas still requires both.
+Re-run binding after other upgrades that move the path (for example a Node
+version bump under nvm/volta/mise, or a `brew upgrade` of a Pi or OMP formula);
+a stale binding **fails closed** with the
 recorded path and the command to fix it, rather than silently falling back.
 
 Install OMP outside `~/.local/bin`, which is reserved for the protected shims.
