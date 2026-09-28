@@ -15,6 +15,7 @@ import {
   readFileSync,
   realpathSync,
   rmSync,
+  symlinkSync,
   writeFileSync,
 } from 'node:fs';
 import { homedir, tmpdir } from 'node:os';
@@ -903,6 +904,66 @@ nativeCheck('full launch still succeeds when the target is outside PROJECT', () 
   const r = runShim(fx, { PI_EXECUTABLE: TRUSTED_ECHO, PI_PROJECT: proj }, ['outside-ok']);
   assert.equal(r.status, 0, r.stderr);
   assert.match(r.stdout, /outside-ok/);
+});
+
+nativeCheck('full launch refuses a PROJECT inside a write-protected .omp folder', () => {
+  // The profile denies every .pi/.omp path component under PROJECT, so a project
+  // inside one (e.g. an OMP worktree) would launch read-only; refuse it instead.
+  const fx = fixture();
+  const proj = join(bindableDir(), '.omp', 'wt', 'repo');
+  mkdirSync(proj, { recursive: true });
+  const r = runShim(fx, { PI_EXECUTABLE: TRUSTED_ECHO, PI_PROJECT: proj }, ['x']);
+  assert.notEqual(r.status, 0, 'a PROJECT inside .omp must not launch');
+  assert.match(r.stderr, /inside a protected agent config folder/);
+});
+
+nativeCheck('full launch refuses a PROJECT inside other protected harness folders', () => {
+  const fx = fixture();
+  for (const sub of [['.opencode', 'plugins'], ['.claude', 'hooks']]) {
+    const proj = join(bindableDir(), ...sub, 'repo');
+    mkdirSync(proj, { recursive: true });
+    const r = runShim(fx, { PI_EXECUTABLE: TRUSTED_ECHO, PI_PROJECT: proj }, ['x']);
+    assert.notEqual(r.status, 0, `a PROJECT inside ${sub.join('/')} must not launch`);
+    assert.match(r.stderr, /inside a protected agent config folder/);
+  }
+});
+
+// Seatbelt checks resolved paths, so the path-name deny on .pi/.omp does not
+// cover a symlinked folder or a link inside one that resolves to a writable
+// location; the launcher refuses those layouts.
+nativeCheck('full launch refuses a symlinked project .pi folder', () => {
+  const fx = fixture();
+  const proj = bindableDir();
+  mkdirSync(join(proj, 'agent-config'));
+  symlinkSync('agent-config', join(proj, '.pi'));
+  const r = runShim(fx, { PI_EXECUTABLE: TRUSTED_ECHO, PI_PROJECT: proj }, ['x']);
+  assert.notEqual(r.status, 0, 'a symlinked .pi must not launch');
+  assert.match(r.stderr, /symlinked project agent config/);
+});
+
+nativeCheck('full launch refuses a link inside .pi that resolves into the project', () => {
+  const fx = fixture();
+  const proj = bindableDir();
+  mkdirSync(join(proj, '.pi'));
+  mkdirSync(join(proj, 'config'));
+  writeFileSync(join(proj, 'config', 'pi.json'), '{}\n');
+  symlinkSync('../config/pi.json', join(proj, '.pi', 'settings.json'));
+  const r = runShim(fx, { PI_EXECUTABLE: TRUSTED_ECHO, PI_PROJECT: proj }, ['x']);
+  assert.notEqual(r.status, 0, 'a .pi link into the project must not launch');
+  assert.match(r.stderr, /symlinked project agent config/);
+});
+
+nativeCheck('full launch still succeeds with a link that stays inside .pi', () => {
+  const fx = fixture();
+  const proj = bindableDir();
+  const bin = join(proj, '.pi', 'npm', 'node_modules', '.bin');
+  mkdirSync(join(proj, '.pi', 'npm', 'node_modules', 'pkg'), { recursive: true });
+  mkdirSync(bin);
+  writeFileSync(join(proj, '.pi', 'npm', 'node_modules', 'pkg', 'cli.js'), '\n');
+  symlinkSync('../pkg/cli.js', join(bin, 'pkg'));
+  const r = runShim(fx, { PI_EXECUTABLE: TRUSTED_ECHO, PI_PROJECT: proj }, ['inner-ok']);
+  assert.equal(r.status, 0, r.stderr);
+  assert.match(r.stdout, /inner-ok/);
 });
 
 nativeCheck('shared launcher selects OMP and injects the protected extension', () => {

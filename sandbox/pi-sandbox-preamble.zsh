@@ -1004,9 +1004,62 @@ case "$PROJECT" in
     emit "refusing unsafe boundary '$PROJECT' (broad/system/credential path)."
     emit "cd into a project directory or set PI_PROJECT=<dir>; call the real Pi binary directly to bypass."; exit 1 ;;
 esac
+# The profile write-denies project agent config components under PROJECT. A
+# PROJECT that itself sits inside such a folder (for example an OMP-managed
+# worktree under ~/.omp/wt) would be denied wholesale, so refuse it clearly
+# instead of launching into a read-only project.
+# Keep these patterns in step with the project agent config regexes in pi-sandbox.sb.
+case "$PROJECT" in
+  */.pi|*/.pi/*|*/.omp|*/.omp/* \
+  |*/.(claude|codex)/(extensions|hooks|tools)|*/.(claude|codex)/(extensions|hooks|tools)/* \
+  |*/.gemini/extensions|*/.gemini/extensions/* \
+  |*/.opencode/plugins|*/.opencode/plugins/*)
+    emit "refusing boundary '$PROJECT': it is inside a protected agent config folder, which the sandbox write-protects."
+    emit "cd into a project directory or set PI_PROJECT=<dir>; call the real Pi binary directly to bypass."; exit 1 ;;
+esac
 
 ACTIVE_HOOKS="$(resolve_active_hooks "$PROJECT")" || exit 1
 TMPDIR_CANON="$(canonical_safe_tmpdir "${TMPDIR:-/tmp}")" || exit 1
+
+# The profile's project agent config deny matches path names, but Seatbelt checks
+# the RESOLVED path. A symlinked <base>/.pi or <base>/.omp, or a link inside one
+# that resolves to a writable location outside that folder, would leave the
+# config Pi/OMP loads at the next start writable. Refuse those layouts for
+# PROJECT and the launch cwd (Pi resolves <cwd>/.pi). Links that stay inside the
+# config folder (npm .bin links) or point to non-writable locations are fine.
+# Prints the offending path and returns 1 on a refused layout.
+project_config_symlink_offender() {
+  emulate -L zsh
+  local base dir dir_canon link target
+  for base in "$@"; do
+    for dir in "$base/.pi" "$base/.omp"; do
+      if [ -L "$dir" ]; then print -r -- "$dir"; return 1; fi
+      [ -d "$dir" ] || continue
+      dir_canon="${dir:A}"
+      # ** does not descend through symlinked directories.
+      for link in "$dir"/**/*(ND@); do
+        target="${link:A}"
+        case "$target" in "$dir_canon"|"$dir_canon"/*) continue ;; esac
+        # Probe a child so a link to a write root itself (e.g. PROJECT) matches too.
+        if executable_under_sandbox_write_root \
+             "$target/." "$HOME_CANON" "$PROJECT" "$TMPDIR_CANON"; then
+          print -r -- "$link -> $target"; return 1
+        fi
+      done
+    done
+  done
+  return 0
+}
+_pi_config_bases=("$PROJECT")
+[ "${PWD:A}" = "$PROJECT" ] || _pi_config_bases+=("${PWD:A}")
+if ! _pi_config_offender="$(project_config_symlink_offender "${_pi_config_bases[@]}")"; then
+  emit "refusing to launch: symlinked project agent config '$_pi_config_offender'."
+  emit "  The sandbox write-protects .pi/.omp by path, so a symlinked folder or a link to a"
+  emit "  writable location outside it would stay agent-writable. Replace the link with a real"
+  emit "  folder or file; call the real Pi binary directly to bypass."
+  exit 1
+fi
+unset _pi_config_bases _pi_config_offender
 
 # Re-check the launch target now that PROJECT and TMPDIR are actually known.
 #

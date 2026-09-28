@@ -146,6 +146,28 @@
   (require-all
     (subpath (string-append (param "OMP_STATE_ROOT") "/wt"))
     (regex #"/hooks(/|$)"))
+  ;; Project agent config: same persistence class as git hooks. Pi loads
+  ;; <cwd>/.pi (settings, extensions, packages, SYSTEM.md, …) once a project is
+  ;; trusted; OMP loads <cwd>/.omp and its ancestors with no trust gate, plus
+  ;; in-process extensions/plugins and executed hooks/tools from other harness
+  ;; dirs. A planted entry runs at the next start: it can disable the in-process
+  ;; guard, or run unconfined if the agent is later started without the shim.
+  ;; Any depth under PROJECT, since the launch cwd may be a subdirectory.
+  ;; The folder node itself matches, so creating a MISSING .pi/.omp, renaming
+  ;; into or away from it, and planting a symlink there are all denied.
+  ;; Same technique as the submodule hooks deny: PROJECT-scoped subpath AND a
+  ;; static component regex (never a PROJECT-interpolated regex). The launcher
+  ;; refuses a PROJECT whose own path has any of these components, which these
+  ;; regexes would otherwise match wholesale, and symlinked .pi/.omp layouts.
+  ;; Keep these regexes in step with the PROJECT refusal patterns in pi-sandbox-preamble.zsh.
+  (require-all
+    (subpath (param "PROJECT"))
+    (require-any
+      (regex #"/\.pi(/|$)")
+      (regex #"/\.omp(/|$)")
+      (regex #"/\.(claude|codex)/(extensions|hooks|tools)(/|$)")
+      (regex #"/\.gemini/extensions(/|$)")
+      (regex #"/\.opencode/plugins(/|$)")))
   (subpath (string-append (param "PI_AGENT_STATE") "/extensions"))
   (literal (string-append (param "PI_AGENT_STATE") "/settings.json"))
   (literal (string-append (param "PI_AGENT_STATE") "/auth.json"))

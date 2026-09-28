@@ -217,6 +217,81 @@ if sb /bin/sh -c "echo x > '$PROJ/.git/hooks/pre-commit'" 2>/dev/null; then
   die "SECURITY: default .git/hooks write ALLOWED while ACTIVE_HOOKS is out-of-project"; fi
 ACTIVE_HOOKS="$PROJ/.git/hooks"
 
+# 1f. Project agent config that Pi/OMP load at the next start (extensions,
+# settings, system prompts, OMP hooks/tools/MCP) — same persistence class as
+# git hooks. Pi/OMP read these from the launch cwd (OMP also from ancestors), so
+# the deny covers any depth under PROJECT. Creating a missing file or folder must
+# fail too, not only editing an existing one (CVE-2026-25725 class), as must
+# delete, rename-away, rename-into, and symlink planting.
+mkdir -p "$PROJ/.pi/extensions" "$PROJ/.omp" "$PROJ/.claude" "$PROJ/.codex" \
+  "$PROJ/.gemini" "$PROJ/.opencode" "$PROJ/pkg"
+printf '{}\n' > "$PROJ/.pi/settings.json"
+printf 'x\n'  > "$PROJ/.pi/extensions/existing.ts"
+printf 'x\n'  > "$PROJ/.omp/config.yml"
+for protected in \
+  "$PROJ/.pi/settings.json" \
+  "$PROJ/.pi/extensions/existing.ts" \
+  "$PROJ/.omp/config.yml"
+do
+  if sb /bin/sh -c "echo tamper >> '$protected'" 2>/dev/null; then
+    die "SECURITY: project agent config modify ALLOWED: $protected"; fi
+  if sb /bin/sh -c "rm -f '$protected'" 2>/dev/null && [ ! -e "$protected" ]; then
+    die "SECURITY: project agent config delete ALLOWED: $protected"; fi
+done
+for created in \
+  "$PROJ/.pi/extensions/evil.ts" \
+  "$PROJ/.pi/SYSTEM.md" \
+  "$PROJ/.pi/APPEND_SYSTEM.md" \
+  "$PROJ/.omp/mcp.json" \
+  "$PROJ/.claude/extensions/evil.ts" \
+  "$PROJ/.claude/hooks/pre/evil.sh" \
+  "$PROJ/.claude/tools/evil.sh" \
+  "$PROJ/.codex/extensions/evil.ts" \
+  "$PROJ/.codex/hooks/pre/evil.sh" \
+  "$PROJ/.codex/tools/evil.sh" \
+  "$PROJ/.gemini/extensions/evil/gemini-extension.json" \
+  "$PROJ/.opencode/plugins/evil.ts" \
+  "$PROJ/pkg/.pi/settings.json" \
+  "$PROJ/pkg/.omp/settings.json"
+do
+  if sb /bin/sh -c "mkdir -p \"\$(dirname '$created')\" && echo x > '$created'" 2>/dev/null; then
+    die "SECURITY: project agent config create ALLOWED: $created"; fi
+done
+# Missing folders themselves (nested launch cwd), and symlink planting.
+if sb /bin/sh -c "mkdir '$PROJ/pkg/.pi'" 2>/dev/null; then
+  die "SECURITY: missing project .pi folder create ALLOWED"; fi
+if sb /bin/sh -c "mkdir '$PROJ/pkg/.omp'" 2>/dev/null; then
+  die "SECURITY: missing project .omp folder create ALLOWED"; fi
+if sb /bin/sh -c "ln -s '$FAKETMP' '$PROJ/pkg/.pi'" 2>/dev/null; then
+  die "SECURITY: project .pi symlink plant ALLOWED"; fi
+# Rename-away (then recreate) and rename-into from an in-project staging dir.
+if sb /bin/sh -c "mv '$PROJ/.pi' '$PROJ/pi-moved'" 2>/dev/null; then
+  die "SECURITY: project .pi rename-away ALLOWED"; fi
+sb /bin/sh -c "mkdir -p '$PROJ/staging' && echo x > '$PROJ/staging/settings.json'" \
+  || die "in-project staging dir write denied"
+if sb /bin/sh -c "mv '$PROJ/staging' '$PROJ/pkg/.pi'" 2>/dev/null; then
+  die "SECURITY: rename-into project .pi ALLOWED"; fi
+# Controls: plain context files and look-alike names stay writable.
+for writable in \
+  "$PROJ/AGENTS.md" \
+  "$PROJ/.agents/skills/demo/SKILL.md" \
+  "$PROJ/.claude/skills/demo/SKILL.md" \
+  "$PROJ/.pi-notes.txt" \
+  "$PROJ/src/.pix/file.txt" \
+  "$PROJ/docs/omp/guide.md" \
+  "$PROJ/src/extensions/plugin.ts"
+do
+  sb /bin/sh -c "mkdir -p \"\$(dirname '$writable')\" && echo ok > '$writable'" \
+    || die "OVER-DENY: project file write DENIED: $writable"
+done
+# The deny is scoped to PROJECT (no unanchored regex hole or over-deny elsewhere):
+# a .pi folder under another writable root (here /private/tmp) is unaffected.
+sb /bin/sh -c "mkdir -p '$PROBEROOT/elsewhere/.pi' && echo x > '$PROBEROOT/elsewhere/.pi/settings.json'" \
+  || die "OVER-DENY: .pi write outside PROJECT denied (project-config regex not scoped)"
+sb_omp /bin/sh -c "echo x > '$PROJ/pkg/w.txt'" || die "in-project write denied under OMP"
+if sb_omp /bin/sh -c "echo tamper >> '$PROJ/.omp/config.yml'" 2>/dev/null; then
+  die "SECURITY: project .omp config modify ALLOWED under OMP"; fi
+
 # 2. outside-project write DENIED — the key proof. Target the REAL home dir: it is
 # outside every writable root (the profile's HOME param points at FAKEHOME, and the
 # real home is not under PROJECT/TMPDIR//private/tmp). Non-recursive cleanup.

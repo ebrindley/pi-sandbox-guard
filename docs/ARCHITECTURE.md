@@ -469,6 +469,35 @@ implementation denies the
 - hook trees inside OMP-managed checkouts/worktrees under the active `wt/`
   runtime path (directory nodes and inert `*.sample` files remain writable)
 
+Also re-denied: **project agent config** that Pi or OMP loads at the next start.
+Pi loads `<cwd>/.pi` (settings, extensions, packages under `.pi/npm` and
+`.pi/git`, skills, prompts, themes, `SYSTEM.md`, `APPEND_SYSTEM.md`) once the
+project is trusted. OMP loads `<cwd>/.omp` and its ancestors with no trust gate,
+and also runs extensions, plugins, hooks, and tools from other harness folders.
+A planted entry could disable the in-process guard, or run unconfined if the
+agent is later started without the shim. Denied at any depth under PROJECT,
+since the launch cwd can be a subdirectory:
+
+- every `.pi` and `.omp` folder, including the folder node itself, so creating
+  a missing folder, renaming into or away from it, and symlink planting all fail
+- `.claude/{extensions,hooks,tools}`, `.codex/{extensions,hooks,tools}`,
+  `.gemini/extensions`, `.opencode/plugins`
+
+The match is a PROJECT-scoped `subpath` AND a static component regex, like the
+submodule hooks rule. The launcher refuses a PROJECT whose own path has any
+protected component, which the regex would otherwise deny wholesale. Because
+Seatbelt checks resolved paths, it also refuses a symlinked `.pi`/`.omp` under
+PROJECT or the launch cwd, or a link inside one that resolves to a writable
+location outside that folder. The check treats each writable root as a whole,
+so a link to a re-denied spot inside one (for example
+`~/.pi/agent/extensions`) is refused too; copy the files instead. Plain
+context (`AGENTS.md`, `CLAUDE.md`, `.agents/skills`, rules) stays writable. The
+user-facing limit: agents cannot edit project `.pi`/`.omp` config, including
+`pi install -l` or project-scoped `/settings` changes through the shim; edit it
+yourself or use the real binary. Project MCP and settings files that OMP reads
+from other harnesses (`.mcp.json`, `.claude/settings.json`,
+`.codex/config.toml`, `opencode.json`, and similar) are not yet covered.
+
 `.git/config` remains writable for routine `git remote` / tracking use. That
 means residual risk remains if config can repoint hooks or aliases in ways the
 profile does not yet cover, see **Persistence risks** below. Git run *through*
@@ -550,6 +579,11 @@ risks**, not fully solved problems:
 4. **Unsandboxed follow-up commands**, `git commit`/`push`, `npm install`,
    `make`, IDE tasks, and CI on a developer machine execute project-controlled
    code without this Seatbelt profile.
+5. **Project agent config moved in from outside**, the deny checks the path
+   being written, so a folder staged under a writable root outside PROJECT
+   (for example `/private/tmp/x/.pi`) and then moved into a project
+   subdirectory lands intact. That is deliberate evasion, not a literal write;
+   review new `.pi`/`.omp` folders before launching from that subdirectory.
 
 **Rule:** after an agent session, **review the diff** (and submodule/worktree
 pointers) before running unsandboxed git or builds. Prefer running those steps
