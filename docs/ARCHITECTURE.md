@@ -385,7 +385,7 @@ npm run deploy:launchers  # shim + profile -> ~/.local/bin
 by delegating to `scripts/test-sandbox-profile.sh` (forced real run, never
 skipped): the profile must compile and apply; an in-project write must be
 allowed; active-hook writes must be denied while routine `.git/config` stays
-writable; a write to the real home dir must be denied; Pi sessions and OMP
+writable; a write outside all allowed roots must be denied; Pi sessions and OMP
 operational state writable while both runtimes' config/extension surfaces stay
 denied; `~/.ssh` and project `.env` reads denied; a project
 `.pem` read allowed (no over-restriction). It backs up any existing launcher to
@@ -423,8 +423,10 @@ Component-only deployment remains available through `deploy` and
   scaffold a fresh project. Only genuinely broad roots are refused (see below).
 - `$TMPDIR` (canonical, validated) and `/private/tmp`
 - active Pi state **except** `settings.json`, `auth.json`, `trust.json`,
-  any `*prompt*.md`, `extensions/` (so the sandboxed Pi cannot tamper with
-  config/auth/trust/prompt state or **disable the guard**)
+  `SYSTEM.md`, `APPEND_SYSTEM.md`, `models.json`, any `*prompt*.md`,
+  `extensions/`, `npm/`, `git/` and `skills/`. These denials also apply to
+  supported `PI_CODING_AGENT_DIR` relocation. Sessions, temporary runtime
+  state and theme JSON remain writable.
 - `~/.npm`, `~/.cache`, `~/Library/Caches` (so npm/pip/uv/playwright work)
 - OMP sessions, blobs, operational databases, logs, worktrees, and managed
   runtime/cache paths under the active OMP profile. This is a positive allowlist,
@@ -435,6 +437,13 @@ Component-only deployment remains available through `deploy` and
 skills, agents, prompts, rules, instructions, model/MCP/SSH configuration, and
 dotenv files. OMP's mixed operational/auth `agent.db` remains writable because
 normal OMP operation cannot separate those concerns at file granularity.
+
+Pi's package-store protection covers configured package resources and their
+dependencies; Pi does not execute every arbitrary directory under `npm/` or
+`git/`. System prompts and skills can influence later sessions across projects,
+while `models.json` can supply provider settings and command-backed values.
+Read access remains permitted. Theme JSON is appearance data and stays writable.
+These protections do not make the in-process analyzer a security boundary.
 
 **Read-denied** (everything else is readable, including all project files except
 as listed):
@@ -611,6 +620,15 @@ not.
 - **OMP administration**: updates, plugin installation, and active XDG-split
   state roots require the real OMP binary. Protected OMP keeps plugin/config/
   extension surfaces read-only.
+- **Pi administration**: package operations that write `npm/` or `git/`, including
+  startup/reload installation of missing or mismatched packages, cannot complete
+  through the guard. Use an operator-run real Pi binary for package maintenance,
+  and edit global system prompts, skills and `models.json` outside the guard.
+  Source registration/removal already needed writes to protected `settings.json`;
+  package-store protection now prevents those earlier store mutations too.
+  Existing resources remain readable. Theme JSON edits remain permitted; saving
+  model/theme selections to `settings.json` was already restricted. There is no
+  automatic retry outside the sandbox.
 - **OMP `agent.db`**: operational data and credentials share one SQLite file,
   so normal runtime writes also mean file-level auth tamper resistance cannot be
   claimed for OMP.
@@ -636,3 +654,7 @@ contains a space:
 To re-verify the profile alone at any time, run `npm run test:sandbox-profile`
 (the standalone, non-installing form of the deploy-time probes; the deploy path
 runs the same script). `npm run deploy:launchers` runs it as its pre-install gate.
+The harness uses a disposable home outside both the fixed `/private/tmp` grant
+and its configured `TMPDIR`, so OMP default-deny checks are meaningful. It checks
+creation, modification and read access for the six Pi user-state surfaces at
+default and relocated roots, plus OMP counterparts and writable-state controls.

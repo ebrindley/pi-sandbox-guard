@@ -57,12 +57,13 @@ fi
 
 say "[test-sandbox-profile] validating SBPL profile compiles & applies: $PROFILE_SRC"
 
-# IMPORTANT: the fake HOME must NOT live under the TMPDIR we pass to the profile,
-# or "escape" writes would succeed simply by being under the (writable) TMPDIR and
-# the boundary test would be meaningless. Put the fake HOME under /private/tmp and
-# pass a SEPARATE, sibling TMPDIR. Project path INCLUDES A SPACE to catch argv bugs.
-PROBEROOT="$(mktemp -d /private/tmp/pi-sb-probe-XXXXXX)"
-trap 'rm -rf "$PROBEROOT" 2>/dev/null || true' EXIT
+# Keep fake HOME outside BOTH the fixed /private/tmp grant and parameter TMPDIR,
+# so default-deny tests cannot pass through a blanket temp write grant.
+# Project path INCLUDES A SPACE to catch argv bugs. All fixtures stay disposable.
+PROBEROOT="$(mktemp -d /private/var/tmp/pi-sb-probe-XXXXXX)"
+FIXEDTMP=""
+trap 'rm -rf "$PROBEROOT" "$FIXEDTMP" 2>/dev/null || true' EXIT
+FIXEDTMP="$(mktemp -d /private/tmp/pi-sb-fixedtmp-XXXXXX)"
 FAKEHOME="$PROBEROOT/home"
 FAKETMP="$PROBEROOT/tmp"
 PROJ="$FAKEHOME/My Project"
@@ -129,6 +130,10 @@ sb_pi_relocated() {
 
 sb true || die "profile failed to apply (missing ACTIVE_HOOKS param?)"
 
+# The fixed /private/tmp grant must work independently of parameter TMPDIR.
+sb /bin/sh -c 'printf "probe\n" > "$1/marker.txt"' sh "$FIXEDTMP" \
+  || die "write under /private/tmp denied unexpectedly"
+
 # 1. in-project write allowed (path has a space — exercises argv correctness)
 sb /bin/sh -c "echo ok > '$PROJ/w.txt'" || die "in-project write denied (argv/space bug?)"
 # 1b. PROJECT/.git/hooks ACTIVE hook files DENIED (persistence/escape vector),
@@ -155,14 +160,12 @@ if sb /bin/sh -c "echo x > '$PROJ/.git/hooks/sample-evil'" 2>/dev/null; then
 sb /bin/sh -c "echo x > '$PROJ/.git/hooks/pre-commit.sample'" \
   || die "PROJECT/.git/hooks/*.sample write denied ('git init' would fail; the *.sample re-allow is missing)"
 # The *.sample re-allow must be SCOPED to this project — a *.sample write in some
-# OTHER repo on the host must stay denied (write-containment). Use a
-# hooks path under the REAL home, outside every writable root.
-OTHER_HOOKS="$HOME/.pi-sb-hookprobe.$$/.git/hooks"
+# OTHER repo must stay denied (write-containment). This fixture is outside
+# every writable root; there is no need to touch the real home directory.
+OTHER_HOOKS="$PROBEROOT/other-repo/.git/hooks"
 mkdir -p "$OTHER_HOOKS"
 if sb /bin/sh -c "echo x > '$OTHER_HOOKS/evil.sample'" 2>/dev/null; then
-  rm -rf "$HOME/.pi-sb-hookprobe.$$" 2>/dev/null || true
   die "SECURITY: out-of-project .git/hooks/*.sample write ALLOWED (write-containment breach)"; fi
-rm -rf "$HOME/.pi-sb-hookprobe.$$" 2>/dev/null || true
 sb /bin/sh -c "echo x >> '$PROJ/.git/config'" \
   || die "PROJECT/.git/config write denied (routine git ops would break; deny is meant to be scoped to hooks dirs)"
 
@@ -201,9 +204,9 @@ sb /bin/sh -c "echo x > '$PROJ/.git/modules/sub/hooks/pre-commit.sample'" \
 sb /bin/sh -c "echo x > '$PROJ/.git/modules/outer/modules/inner/hooks/update.sample'" \
   || die "nested submodule hooks/*.sample write denied"
 
-# 1e. Out-of-project ACTIVE_HOOKS under a writable root (/private/tmp via
-# PROBEROOT): the ACTIVE_HOOKS subtree deny must override the /private/tmp allow.
-OUT_ACTIVE_HOOKS="$PROBEROOT/out-of-project-hooks"
+# 1e. Out-of-project ACTIVE_HOOKS under writable TMPDIR: the subtree deny
+# must override that allow.
+OUT_ACTIVE_HOOKS="$FAKETMP/out-of-project-hooks"
 mkdir -p "$OUT_ACTIVE_HOOKS"
 ACTIVE_HOOKS="$OUT_ACTIVE_HOOKS"
 if sb /bin/sh -c "echo x > '$OUT_ACTIVE_HOOKS/pre-commit'" 2>/dev/null; then
@@ -211,8 +214,8 @@ if sb /bin/sh -c "echo x > '$OUT_ACTIVE_HOOKS/pre-commit'" 2>/dev/null; then
 if sb /bin/sh -c "echo x > '$OUT_ACTIVE_HOOKS/post-index-change'" 2>/dev/null; then
   die "SECURITY: out-of-project ACTIVE_HOOKS obscure hook write ALLOWED"; fi
 # Writable root outside ACTIVE_HOOKS still works; default project hooks stay denied.
-sb /bin/sh -c "echo x > '$PROBEROOT/not-hooks.txt'" \
-  || die "write under /private/tmp (non-ACTIVE_HOOKS) denied unexpectedly"
+sb /bin/sh -c "echo x > '$FAKETMP/not-hooks.txt'" \
+  || die "write under TMPDIR (non-ACTIVE_HOOKS) denied unexpectedly"
 if sb /bin/sh -c "echo x > '$PROJ/.git/hooks/pre-commit'" 2>/dev/null; then
   die "SECURITY: default .git/hooks write ALLOWED while ACTIVE_HOOKS is out-of-project"; fi
 ACTIVE_HOOKS="$PROJ/.git/hooks"
@@ -285,19 +288,16 @@ do
     || die "OVER-DENY: project file write DENIED: $writable"
 done
 # The deny is scoped to PROJECT (no unanchored regex hole or over-deny elsewhere):
-# a .pi folder under another writable root (here /private/tmp) is unaffected.
-sb /bin/sh -c "mkdir -p '$PROBEROOT/elsewhere/.pi' && echo x > '$PROBEROOT/elsewhere/.pi/settings.json'" \
+# a .pi folder under another writable root (here TMPDIR) is unaffected.
+sb /bin/sh -c "mkdir -p '$FAKETMP/elsewhere/.pi' && echo x > '$FAKETMP/elsewhere/.pi/settings.json'" \
   || die "OVER-DENY: .pi write outside PROJECT denied (project-config regex not scoped)"
 sb_omp /bin/sh -c "echo x > '$PROJ/pkg/w.txt'" || die "in-project write denied under OMP"
 if sb_omp /bin/sh -c "echo tamper >> '$PROJ/.omp/config.yml'" 2>/dev/null; then
   die "SECURITY: project .omp config modify ALLOWED under OMP"; fi
 
-# 2. outside-project write DENIED — the key proof. Target the REAL home dir: it is
-# outside every writable root (the profile's HOME param points at FAKEHOME, and the
-# real home is not under PROJECT/TMPDIR//private/tmp). Non-recursive cleanup.
-ESC="$HOME/.pi-sb-escape-probe.$$"
+# 2. Outside-project write DENIED. The fixture is outside every writable root.
+ESC="$PROBEROOT/outside-write"
 if sb /bin/sh -c "echo x > '$ESC'" 2>/dev/null; then
-  rm -f "$ESC" 2>/dev/null || true
   die "SECURITY: outside-project write ALLOWED"; fi
 # 3. ~/.pi/agent/sessions-style write allowed but settings.json / extensions DENIED
 sb /bin/sh -c "mkdir -p '$FAKEHOME/.pi/agent/sessions' && echo s > '$FAKEHOME/.pi/agent/sessions/x'" \
@@ -330,6 +330,42 @@ sb_pi_relocated /bin/sh -c "mkdir -p '$FAKEHOME/.pi/alternate-agent/sessions' &&
   || die "relocated Pi session state write denied"
 if sb_pi_relocated /bin/sh -c "touch '$FAKEHOME/.pi/agent/extensions/relocation-tamper'" 2>/dev/null; then
   die "SECURITY: relocated Pi state unprotected the canonical shared extension"
+fi
+
+# User packages and steering/config files stay read-only at the active state
+# root, even when initially absent. Use inert markers, never executable code.
+check_user_state_protection() {
+  local runner="$1" state_root="$2" relative target
+  for relative in npm/node_modules/probe/marker.txt git/probe/marker.txt \
+    skills/probe/SKILL.md SYSTEM.md APPEND_SYSTEM.md models.json
+  do
+    target="$state_root/$relative"
+    mkdir -p "$(dirname "$target")"
+    if "$runner" /bin/sh -c 'printf "probe\n" > "$1"' sh "$target" 2>/dev/null; then
+      die "SECURITY: user state create ALLOWED: $target"
+    fi
+    printf 'original\n' > "$target"
+    if "$runner" /bin/sh -c 'printf "probe\n" >> "$1"' sh "$target" 2>/dev/null; then
+      die "SECURITY: user state modify ALLOWED: $target"
+    fi
+    "$runner" /bin/cat "$target" >/dev/null || die "user state read denied: $target"
+  done
+}
+check_user_state_protection sb "$FAKEHOME/.pi/agent"
+check_user_state_protection sb_pi_relocated "$FAKEHOME/.pi/alternate-agent"
+# OMP already denies these through its allowlist/re-denies; no new policy needed.
+check_user_state_protection sb_omp "$FAKEHOME/.omp/agent"
+for runner in sb sb_pi_relocated; do
+  state_root="$FAKEHOME/.pi/agent"
+  [ "$runner" != sb_pi_relocated ] || state_root="$FAKEHOME/.pi/alternate-agent"
+  "$runner" /bin/sh -c 'mkdir -p "$1/themes" "$1/tmp/extensions" &&
+    printf "{}\n" > "$1/themes/probe.json" && printf "state\n" > "$1/tmp/extensions/marker.txt"' sh "$state_root" \
+    || die "OVER-DENY: Pi themes/temporary state write denied: $state_root"
+done
+# OMP themes are outside its positive runtime allowlist.
+mkdir -p "$FAKEHOME/.omp/agent/themes"
+if sb_omp /bin/sh -c "echo '{}' > '$FAKEHOME/.omp/agent/themes/probe.json'" 2>/dev/null; then
+  die "SECURITY: OMP theme write ALLOWED"
 fi
 # 4. secret reads denied (~/.ssh, project .env) but project source/cert READABLE
 if sb /bin/sh -c "cat '$FAKEHOME/.ssh/id_probe'" >/dev/null 2>&1; then
@@ -391,8 +427,9 @@ do
     die "SECURITY: OMP executable/config surface write ALLOWED: $protected"
   fi
 done
-rm -rf "$PROBEROOT" 2>/dev/null || true
+rm -rf "$PROBEROOT" "$FIXEDTMP" 2>/dev/null || true
 trap - EXIT
 say "[test-sandbox-profile] profile OK: in-project write + project-file read allowed; default/.githooks/"
 say "[test-sandbox-profile]   submodule/out-of-project ACTIVE_HOOKS, outside-project, ~/.pi config/auth/"
-say "[test-sandbox-profile]   Pi/OMP extension/config writes and secret reads denied; OMP runtime state preserved."
+say "[test-sandbox-profile]   Pi/OMP extension/config writes and secret reads denied; Pi package/prompt/model/skill"
+say "[test-sandbox-profile]   protection verified at default/relocated roots; Pi themes and runtime state preserved."
