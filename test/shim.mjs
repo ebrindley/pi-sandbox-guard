@@ -580,6 +580,44 @@ check('a node-shebang target with no recorded interpreter keeps shebang launch',
   assert.deepEqual((r.stdout || '').trim().split('\n'), [script]);
 });
 
+check('a stable interpreter link follows an upgrade and refuses a writable target', () => {
+  const fx = fixture();
+  const dir = bindableDir();
+  const stable = join(dir, 'node');
+  const first = join(dir, 'node-v1');
+  const second = join(dir, 'node-v2');
+  const script = join(dir, 'pi.js');
+  for (const target of [first, second, script]) {
+    writeFileSync(target, '#!/usr/bin/env node\n');
+    chmodSync(target, 0o755);
+  }
+  symlinkSync(first, stable);
+  const config = join(fx.root, 'executables.conf');
+  writeFileSync(config, `pi=${script}\nnode=${stable}\n`);
+  const run = () => runResolveSelftest(fx, {
+    PI_EXECUTABLE: undefined,
+    PI_SANDBOX_SELFTEST_CONFIG: config,
+    PI_SANDBOX_SELFTEST_VECTOR: '1',
+  });
+  let r = run();
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(r.stdout.trim().split('\n'), [first, script]);
+  rmSync(stable);
+  rmSync(first);
+  symlinkSync(second, stable);
+  r = run();
+  assert.equal(r.status, 0, r.stderr);
+  assert.deepEqual(r.stdout.trim().split('\n'), [second, script]);
+  rmSync(stable);
+  const writable = join(fx.root, 'node');
+  writeFileSync(writable, '#!/bin/sh\nexit 0\n');
+  chmodSync(writable, 0o755);
+  symlinkSync(writable, stable);
+  r = run();
+  assert.notEqual(r.status, 0);
+  assert.match(r.stderr, /recorded Node interpreter is no longer usable/);
+});
+
 check('a recorded interpreter that vanished fails closed', () => {
   const fx = fixture();
   const config = join(fx.root, 'executables.conf');

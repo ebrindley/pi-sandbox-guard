@@ -36,6 +36,8 @@
 
 set -euo pipefail
 
+. "$(dirname "${BASH_SOURCE[0]}")/lib-ops.sh"
+
 CONFIG_DIR="${PI_SANDBOX_CONFIG_DIR:-$HOME/.config/pi-sandbox-guard}"
 CONFIG="$CONFIG_DIR/executables.conf"
 SHIM="${PI_SANDBOX_SHIM:-$HOME/.local/bin/pi}"
@@ -393,6 +395,9 @@ if [ -z "$NODE_PATH" ] && needs_interpreter "$PI_CANON"; then
 fi
 NODE_CANON=""
 [ -n "$NODE_PATH" ] && NODE_CANON="$(validate_target "$NODE_PATH" "node")"
+if [ -n "$NODE_CANON" ]; then
+  NODE_CANON="$(ops_stable_node_path "$NODE_CANON")"
+fi
 
 echo "About to record:"
 printf '  pi   = %s\n' "$PI_CANON"

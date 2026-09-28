@@ -104,6 +104,27 @@ ops_default_launchers_dest() {
   printf '%s\n' "${HOME}/.local/bin"
 }
 
+# Keep Homebrew's formula identity across version upgrades, but only if its
+# stable opt link currently selects the exact executable already validated.
+# Other installs retain their resolved pin. No runtime PATH lookup is added.
+ops_stable_node_path() {
+  node -e '
+    const fs = require("fs");
+    const resolved = fs.realpathSync(process.argv[1]);
+    const match = resolved.match(/^(\/opt\/homebrew|\/usr\/local)\/Cellar\/(node(?:@\d+)?)\/[^/]+\/bin\/node$/);
+    if (match) {
+      const stable = `${match[1]}/opt/${match[2]}/bin/node`;
+      try {
+        if (fs.realpathSync(stable) === resolved) {
+          process.stdout.write(stable);
+          process.exit(0);
+        }
+      } catch {}
+    }
+    process.stdout.write(resolved);
+  ' "$1"
+}
+
 # Fixed and host-derived roots that the Seatbelt profile can make writable.
 # PROJECT is caller-supplied because it changes per launch; active Pi/OMP state
 # roots are checked by the launcher after runtime state resolution.

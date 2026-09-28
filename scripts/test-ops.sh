@@ -11,7 +11,7 @@
 # and repo-local core.hooksPath, restored to its prior value — set, empty, or
 # absent — after the setup-hooks check.
 #
-# Usage: scripts/test-ops.sh
+# Usage: scripts/test-ops.sh [--node-binding]
 
 set -euo pipefail
 
@@ -36,6 +36,38 @@ LAUNCHERS_DEST="$DEST_BASE/bin"
 mkdir -p "$DEST_BASE"
 
 say "[test-ops] workdir=$WORKDIR"
+
+# Focused entry point for the two Node-binding writers. All artifacts remain
+# disposable; neither the host binding nor installed extension is touched.
+if [ "${1:-}" = "--node-binding" ]; then
+  resolved_node="$(node -p 'process.execPath')"
+  expected_node="$resolved_node"
+  case "$resolved_node" in
+    /opt/homebrew/Cellar/node*/*/bin/node|/usr/local/Cellar/node*/*/bin/node)
+      prefix="${resolved_node%%/Cellar/*}"
+      formula="${resolved_node#*/Cellar/}"; formula="${formula%%/*}"
+      candidate="$prefix/opt/$formula/bin/node"
+      if [ -x "$candidate" ] && [ "$(node -e 'process.stdout.write(require("fs").realpathSync(process.argv[1]))' "$candidate")" = "$resolved_node" ]; then
+        expected_node="$candidate"
+      fi ;;
+  esac
+  [ "$(ops_stable_node_path /usr/bin/true)" = /usr/bin/true ] \
+    || fail "non-Homebrew executable pin changed"
+  PI_SANDBOX_CONFIG_DIR="$WORKDIR/binding" bash "$REPO_ROOT/scripts/bind-executable.sh" \
+    --pi /usr/bin/true --node "$resolved_node" --yes >/dev/null
+  [ "$(ops_stamp_get "$WORKDIR/binding/executables.conf" node)" = "$expected_node" ] \
+    || fail "bind did not record the expected Node path"
+  PI_SANDBOX_CONFIG_DIR="$WORKDIR/binding" bash "$REPO_ROOT/scripts/bind-executable.sh" --check \
+    || fail "recorded Node binding is invalid"
+  bash "$REPO_ROOT/scripts/deploy-local.sh" --skip-tests --dest "$GUARD_DEST" \
+    || fail "temporary guard artifact failed"
+  [ "$(cat "$GUARD_DEST/.guard-node")" = "$expected_node" ] \
+    || fail "guard did not record the expected Node path"
+  [ "$(ops_stamp_get "$GUARD_DEST/.deployed-version" guard_node)" = "$expected_node" ] \
+    || fail "guard stamp and binding disagree"
+  pass "both Node writers select $expected_node"
+  exit 0
+fi
 
 # --- 1. Syntax ---
 for s in \
