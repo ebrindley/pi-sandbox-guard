@@ -1,5 +1,28 @@
 # pi-sandbox-guard
 
+Deprecated. Use [Agent Guard 0.2.1](https://github.com/ebrindley/AgentGuard/releases/tag/v0.2.1)
+for Pi and Oh My Pi on macOS. See its
+[installation and migration guide](https://github.com/ebrindley/AgentGuard/blob/main/docs/OPERATIONS.md#moving-from-pi-sandbox-guard).
+
+```sh
+/bin/zsh -c "$(/usr/bin/curl -fsSL https://github.com/ebrindley/AgentGuard/releases/latest/download/install.sh)"
+```
+
+Agent Guard installs, updates, checks and removes the guard. It preserves Pi's
+project-based policy, carries over executable bindings and recorded wrappers,
+and retains the migrated files for recovery. Guard List applies to OpenCode only.
+
+Do not run this repository's deploy scripts after migration: they overwrite
+Agent Guard's Pi files. To return to this guard, run `agent-guard uninstall`
+first, then follow the recovery instructions or install from the final
+[v0.1.0 tag](https://github.com/ebrindley/pi-sandbox-guard/tree/v0.1.0).
+
+The legacy instructions below are retained for recovery.
+
+---
+
+# pi-sandbox-guard
+
 **Keeps [Pi](https://pi.dev) and [Oh My Pi](https://omp.sh) from writing outside your project**
 (bar temp dirs and tool caches; see Scope below).
 
